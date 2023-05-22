@@ -6,7 +6,7 @@
 // the necessary functionality at the end of the file.
 
 // Package orderedmap provides an ordered map, implemented as a binary tree.
-package orderedmap
+package slices
 
 // Map is an ordered map.
 type Map[K, V any] struct {

@@ -25,7 +25,7 @@ func TestHmapSize(t *testing.T) {
 	if runtime.RuntimeHmapSize != hmapSize {
 		t.Errorf("sizeof(runtime.hmap{})==%d, want %d", runtime.RuntimeHmapSize, hmapSize)
 	}
-
+	t.Logf("sizeof(runtime.hmap{})==%d, want %d", runtime.RuntimeHmapSize, hmapSize)
 }
 
 // negative zero is a good test because:

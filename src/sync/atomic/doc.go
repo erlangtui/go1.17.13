@@ -52,6 +52,9 @@ import (
 // The first word in a variable or in an allocated struct, array, or slice can
 // be relied upon to be 64-bit aligned.
 
+// CAS 操作是指 Compare-and-Swap 操作，它是一种原子性的操作，用于在多线程编程中实现同步和并发控制。
+// CAS 操作由三个参数组成：内存地址、预期原值和新值。它的作用是比较给定内存地址的值是否等于预期原值，如果相等，则用新值替换原值，如果不相等，则不执行替换操作。
+
 // SwapInt32 atomically stores new into *addr and returns the previous *addr value.
 func SwapInt32(addr *int32, new int32) (old int32)
 

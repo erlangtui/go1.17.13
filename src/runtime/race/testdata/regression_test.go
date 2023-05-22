@@ -4,7 +4,7 @@
 
 // Code patterns that caused problems in the past.
 
-package race_test
+package main_test
 
 import (
 	"testing"

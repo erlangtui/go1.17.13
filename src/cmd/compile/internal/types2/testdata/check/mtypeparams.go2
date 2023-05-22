@@ -6,7 +6,7 @@
 // the type checker accepts methods that have their
 // own type parameter list.
 
-package p
+package slices
 
 type S struct{}
 

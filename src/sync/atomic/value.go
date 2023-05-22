@@ -13,11 +13,14 @@ import (
 // Once Store has been called, a Value must not be copied.
 //
 // A Value must not be copied after first use.
+// Value 提供一致类型化值的原子加载和存储。Value 的零值从加载返回 nil。
+// 调用 Store 后，Value 不得被复制。首次使用后 Value 不得被复制。
 type Value struct {
 	v interface{}
 }
 
 // ifaceWords is interface{} internal representation.
+// 接口的内部表达式
 type ifaceWords struct {
 	typ  unsafe.Pointer
 	data unsafe.Pointer
@@ -25,6 +28,7 @@ type ifaceWords struct {
 
 // Load returns the value set by the most recent Store.
 // It returns nil if there has been no call to Store for this Value.
+// Load 返回由最新存储设置的值。如果没有为此值调用 Store，则返回 nil。
 func (v *Value) Load() (val interface{}) {
 	vp := (*ifaceWords)(unsafe.Pointer(v))
 	typ := LoadPointer(&vp.typ)
@@ -42,6 +46,8 @@ func (v *Value) Load() (val interface{}) {
 // Store sets the value of the Value to x.
 // All calls to Store for a given Value must use values of the same concrete type.
 // Store of an inconsistent type panics, as does Store(nil).
+// 存储将值的值设置为 x。对给定值的 Store 的所有调用都必须使用相同的具体类型的值。
+// 存储不一致的类型会 panic，Store（nil） 也是如此。
 func (v *Value) Store(val interface{}) {
 	if val == nil {
 		panic("sync/atomic: store of nil value into Value")

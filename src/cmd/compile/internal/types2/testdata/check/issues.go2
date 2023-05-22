@@ -4,7 +4,7 @@
 
 // This file contains regression tests for bugs found.
 
-package p
+package slices
 
 import "io"
 import "context"

@@ -62,11 +62,13 @@ import (
 
 const (
 	// Maximum number of key/elem pairs a bucket can hold.
+	// 8，每个桶能够存储的最多键值对数
 	bucketCntBits = 3
 	bucketCnt     = 1 << bucketCntBits
 
 	// Maximum average load of a bucket that triggers growth is 6.5.
 	// Represent as loadFactorNum/loadFactorDen, to allow integer math.
+	// 平均每个桶的最大负载因子
 	loadFactorNum = 13
 	loadFactorDen = 2
 
@@ -74,12 +76,15 @@ const (
 	// Must fit in a uint8.
 	// Fast versions cannot handle big elems - the cutoff size for
 	// fast versions in cmd/compile/internal/gc/walk.go must be at most this elem.
+	// 保证键值的内联的最大尺寸
 	maxKeySize  = 128
 	maxElemSize = 128
 
 	// data offset should be the size of the bmap struct, but needs to be
 	// aligned correctly. For amd64p32 this means 64-bit alignment
 	// even though pointers are 32 bit.
+	// 数据偏移量应为 bmap 结构的大小，但需要正确对齐，即内存对齐后 bmap 占用的实际大小
+	// 对于 amd64p32，这意味着 64 位对齐，即使指针是 32 位。
 	dataOffset = unsafe.Offsetof(struct {
 		b bmap
 		v int64
@@ -89,11 +94,18 @@ const (
 	// Each bucket (including its overflow buckets, if any) will have either all or none of its
 	// entries in the evacuated* states (except during the evacuate() method, which only happens
 	// during map writes and thus no one else can observe the map during that time).
+	// 可能的 tophash 值（顶部哈希值）。
+	// 此单元格为空，并且在较高的索引或溢出处不再有非空单元格。
 	emptyRest      = 0 // this cell is empty, and there are no more non-empty cells at higher indexes or overflows.
+	// 此单元格为空
 	emptyOne       = 1 // this cell is empty
+	// 键值是有效的，入口已疏散到大表的前半部分。
 	evacuatedX     = 2 // key/elem is valid.  Entry has been evacuated to first half of larger table.
+	// 键值是有效的，入口已疏散到大表的后半部分。
 	evacuatedY     = 3 // same as above, but evacuated to second half of larger table.
+	// 单元格为空，桶已经迁移走了
 	evacuatedEmpty = 4 // cell is empty, bucket is evacuated.
+	// 正常填充单元格的最小顶部哈希。
 	minTopHash     = 5 // minimum tophash for a normal filled cell.
 
 	// flags
@@ -103,6 +115,7 @@ const (
 	sameSizeGrow = 8 // the current map growth is to a new map of the same size
 
 	// sentinel bucket ID for iterator checks
+	// 用于迭代器检查的哨兵存储桶 ID
 	noCheck = 1<<(8*sys.PtrSize) - 1
 )
 
@@ -115,16 +128,24 @@ func isEmpty(x uint8) bool {
 type hmap struct {
 	// Note: the format of the hmap is also encoded in cmd/compile/internal/reflectdata/reflect.go.
 	// Make sure this stays in sync with the compiler's definition.
+	// map 元素个数
 	count     int // # live cells == size of map.  Must be first (used by len() builtin)
 	flags     uint8
+	// 桶的数量的对数值，桶数：2^B
 	B         uint8  // log_2 of # of buckets (can hold up to loadFactor * 2^B items)
+	// 溢出桶的大概数量
 	noverflow uint16 // approximate number of overflow buckets; see incrnoverflow for details
+	// 哈希种子
 	hash0     uint32 // hash seed
 
+	// 指向同的指针，多个桶在内存上是连续的
 	buckets    unsafe.Pointer // array of 2^B Buckets. may be nil if count==0.
+	// 在扩容时，指向旧桶的指针
 	oldbuckets unsafe.Pointer // previous bucket array of half the size, non-nil only when growing
+	// 扩容迁移技术
 	nevacuate  uintptr        // progress counter for evacuation (buckets less than this have been evacuated)
 
+	// 额外字段
 	extra *mapextra // optional fields
 }
 
@@ -138,6 +159,11 @@ type mapextra struct {
 	// overflow contains overflow buckets for hmap.buckets.
 	// oldoverflow contains overflow buckets for hmap.oldbuckets.
 	// The indirection allows to store a pointer to the slice in hiter.
+	//  内联存储：即 key 和 value 直接存储在哈希表的内存中，而不是存储在堆上
+	// 如果 key 和 elem 都不包含指针并且是内联的，那么我们将存储桶类型标记为不包含指针。这样可以避免扫描此类地图。但是，bmap.overflow 是一个指针。
+	// 为了使溢出桶保持活动状态，我们将指向所有溢出桶的指针存储在 hmap.extra.overflow 和 hmap.extra.oldoverflow 中。
+	// 仅当键和 elem 不包含指针时才使用溢出和旧溢出。Overflow 包含 hmap.buckets 的溢出存储桶。oldoverflow 包含 hmap.oldbuckets 的溢出存储桶。
+	// 间接寻址允许在命中器中存储指向切片的指针。
 	overflow    *[]*bmap
 	oldoverflow *[]*bmap
 
@@ -150,7 +176,9 @@ type bmap struct {
 	// tophash generally contains the top byte of the hash value
 	// for each key in this bucket. If tophash[0] < minTopHash,
 	// tophash[0] is a bucket evacuation state instead.
+	// tophash 通常包含此存储桶中每个键的哈希值的顶部字节。如果 tophash[0] < minTopHash，则 tophash[0] 是存储桶疏散状态。
 	tophash [bucketCnt]uint8
+	// 将所有的键连续存储在一起，将所有的值连续存储在一起，能够避免 键值/键值 存取方式的内存对齐
 	// Followed by bucketCnt keys and then bucketCnt elems.
 	// NOTE: packing all the keys together and then all the elems together makes the
 	// code a bit more complicated than alternating key/elem/key/elem/... but it allows

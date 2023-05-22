@@ -4,7 +4,7 @@
 
 // This file tests built-in calls on generic types.
 
-package builtins
+package slices
 
 type Bmc interface {
 	type map[rune]string, chan int

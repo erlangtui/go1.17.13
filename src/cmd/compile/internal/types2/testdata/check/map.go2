@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Package orderedmap provides an ordered map, implemented as a binary tree.
-package orderedmap
+package slices
 
 // TODO(gri) fix imports for tests
 import "chans" // ERROR could not import

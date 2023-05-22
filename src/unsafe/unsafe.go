@@ -195,6 +195,8 @@ func Sizeof(x ArbitraryType) uintptr
 // which must be of the form structValue.field. In other words, it returns the
 // number of bytes between the start of the struct and the start of the field.
 // The return value of Offsetof is a Go constant.
+// Offsetof 返回由 x 表示的字段结构内的偏移量，该字段的格式必须是 structValue.field。
+// 换句话说，它返回结构开头和字段开头之间的字节数。偏移量的返回值是一个 Go 常量。
 func Offsetof(x ArbitraryType) uintptr
 
 // Alignof takes an expression x of any type and returns the required alignment
