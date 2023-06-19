@@ -103,6 +103,7 @@ type Context interface {
 	// WithCancel 安排在调用 cancel 时关闭 Done;WithDeadline 安排在截止日期到期时关闭 Done; WithTimeout 安排在超时过后关闭 Done。
 	// 该通道是只读的
 	Done() <-chan struct{}
+	// 在用户执行 case: <- ctx.Done() 时调用，调用Done函数时会惰性创建 chan
 
 	// If Done is not yet closed, Err returns nil.
 	// If Done is closed, Err returns a non-nil error explaining why:
@@ -174,11 +175,12 @@ var Canceled = errors.New("context canceled")
 // 上下文过期的错误，当上下文过期时，在调用Context.Err()函数时返回
 var DeadlineExceeded error = deadlineExceededError{}
 
+// 实现了 net.Error 接口，能用于网络请求的上下文
 type deadlineExceededError struct{}
 
 func (deadlineExceededError) Error() string   { return "context deadline exceeded" }
-func (deadlineExceededError) Timeout() bool   { return true }
-func (deadlineExceededError) Temporary() bool { return true }
+func (deadlineExceededError) Timeout() bool   { return true } // Is the error a timeout?
+func (deadlineExceededError) Temporary() bool { return true } // Is the error temporary?
 
 // An emptyCtx is never canceled, has no values, and has no deadline. It is not
 // struct{}, since vars of this type must have distinct addresses.
@@ -337,6 +339,7 @@ func parentCancelCtx(parent Context) (*cancelCtx, bool) {
 	if !ok { // 判断是否为可以断言为可以取消的上下文
 		return nil, false
 	}
+	// 判断父子是否是同一个done
 	pdone, _ := p.done.Load().(chan struct{})
 	if pdone != done { // 判断可取消的上下文中的 done 值断言的管道
 		return nil, false
@@ -439,7 +442,7 @@ func (c *cancelCtx) String() string {
 
 // cancel closes c.done, cancels each of c's children, and, if
 // removeFromParent is true, removes c from its parent's children.
-// 该取消函数会关闭 c 中 done 管道，取消所有的子上下文，如果 removeFromParent 为真，则将 c 从父上下文中移除
+// 该取消函数会关闭 c 中 done 管道，递归取消所有的子上下文，如果 removeFromParent 为真，则将 c 从父上下文中移除
 func (c *cancelCtx) cancel(removeFromParent bool, err error) {
 	if err == nil { // 从被执行的地方传入一个不为空的err，有可能是父上下文的err，有可能是DeadlineExceeded、Canceled
 		panic("context: internal error: missing cancel error")

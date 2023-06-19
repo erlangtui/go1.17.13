@@ -380,6 +380,7 @@ type sudog struct {
 	// succeeded. It is true if the goroutine was awoken because a
 	// value was delivered over channel c, and false if awoken
 	// because c was closed.
+
 	// success 指示通过通道 C 的通信是否成功。
 	// 如果 goroutine 因为通过通道 c 传递了值而被唤醒，则为 true，
 	// 如果因为 c 被关闭而唤醒，则为 false。

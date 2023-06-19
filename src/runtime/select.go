@@ -118,6 +118,17 @@ func block() {
 // ordinal position of its respective select{recv,send,default} call.
 // Also, if the chosen scase was a receive operation, it reports whether
 // a value was received.
+//1. 锁定scase语句中所有的channel
+//2. 按照随机顺序检测scase中的channel是否ready
+//   2.1 如果case可读，则读取channel中数据，解锁所有的channel，然后返回(case index, true)
+//   2.2 如果case可写，则将数据写入channel，解锁所有的channel，然后返回(case index, false)
+//   2.3 所有case都未ready，则解锁所有的channel，然后返回（default index, false）
+//3. 所有case都未ready，且没有default语句
+//   3.1 将当前协程加入到所有channel的等待队列
+//   3.2 当将协程转入阻塞，等待被唤醒
+//4. 唤醒后返回channel对应的case index
+//   4.1 如果是读操作，解锁所有的channel，然后返回(case index, true)
+//   4.2 如果是写操作，解锁所有的channel，然后返回(case index, false)
 func selectgo(cas0 *scase, order0 *uint16, pc0 *uintptr, nsends, nrecvs int, block bool) (int, bool) {
 	if debugSelect {
 		print("select: cas0=", cas0, "\n")

@@ -11,12 +11,12 @@ func Sleep(d Duration)
 // Interface to timers implemented in package runtime.
 // Must be in sync with ../runtime/time.go:/^type timer
 type runtimeTimer struct {
-	pp       uintptr
-	when     int64
-	period   int64
-	f        func(interface{}, uintptr) // NOTE: must not be closure
-	arg      interface{}
-	seq      uintptr
+	pp       uintptr                    // 当前定时器寄存于系统timer堆的地址
+	when     int64                      // 当前定时器下次触发时间
+	period   int64                      // 当前定时器周期触发间隔（如果是Timer，间隔为0，表示不重复触发
+	f        func(interface{}, uintptr) // NOTE: must not be closure// 定时器触发时执行的函数
+	arg      interface{}                // 定时器触发时执行函数传递的参数
+	seq      uintptr                    // 定时器触发时执行函数传递的参数二(该参数只在网络收发场景下使用)
 	nextwhen int64
 	status   uint32
 }
