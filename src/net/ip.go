@@ -17,37 +17,34 @@ import (
 	"internal/itoa"
 )
 
-// IP address lengths (bytes).
+// IP 地址的长度，字节数
 const (
 	IPv4len = 4
 	IPv6len = 16
 )
 
-// An IP is a single IP address, a slice of bytes.
-// Functions in this package accept either 4-byte (IPv4)
-// or 16-byte (IPv6) slices as input.
-//
 // Note that in this documentation, referring to an
 // IP address as an IPv4 address or an IPv6 address
 // is a semantic property of the address, not just the
 // length of the byte slice: a 16-byte slice can still
 // be an IPv4 address.
+// IP 是单个 IP 地址，是一个字节切片。
+// 此包中的函数接受 4 字节 （IPv4） 或 16 字节 （IPv6）切片作为输入。
+// 请注意，在本文档中，将 IP 地址称为 IPv4 地址或 IPv6 地址是地址的语义属性，而不仅仅是字节片的长度
+// 16 字节的切片仍然可以是 IPv4 地址。
 type IP []byte
 
-// An IPMask is a bitmask that can be used to manipulate
-// IP addresses for IP addressing and routing.
-//
-// See type IPNet and func ParseCIDR for details.
+// IPMask 是一种位掩码，可用于操作 IP 地址以进行 IP 寻址和路由。
+// 有关详细信息，请参阅类型 IPNet 和 func ParseCIDR。
 type IPMask []byte
 
-// An IPNet represents an IP network.
+// IPNet 代表一个 IP 网络。
 type IPNet struct {
-	IP   IP     // network number
-	Mask IPMask // network mask
+	IP   IP     // 网络号码
+	Mask IPMask // 网络掩码
 }
 
-// IPv4 returns the IP address (in 16-byte form) of the
-// IPv4 address a.b.c.d.
+// IPv4 返回 IPv4 地址 a.b.c.d 的 IP 地址（16 字节形式）。
 func IPv4(a, b, c, d byte) IP {
 	p := make(IP, IPv6len)
 	copy(p, v4InV6Prefix)
@@ -58,10 +55,10 @@ func IPv4(a, b, c, d byte) IP {
 	return p
 }
 
+// IPv4 在 IPv6 切片中的前缀，即前12字节内容
 var v4InV6Prefix = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff}
 
-// IPv4Mask returns the IP mask (in 4-byte form) of the
-// IPv4 mask a.b.c.d.
+// IPv4Mask 返回 IPv4 掩码 a.b.c.d 的 IP 掩码（4 字节形式）。
 func IPv4Mask(a, b, c, d byte) IPMask {
 	p := make(IPMask, IPv4len)
 	p[0] = a
@@ -71,10 +68,10 @@ func IPv4Mask(a, b, c, d byte) IPMask {
 	return p
 }
 
-// CIDRMask returns an IPMask consisting of 'ones' 1 bits
-// followed by 0s up to a total length of 'bits' bits.
-// For a mask of this form, CIDRMask is the inverse of IPMask.Size.
+// CIDRMask 返回一个 IPMask 由“ones” 1 位后跟 0 组成，总长度为“bits”位。
+// 对于这种形式的掩码，CIDRMask 是 IPMask.Size 的反码。
 func CIDRMask(ones, bits int) IPMask {
+	// 是否为 IPv4 或 IPv6 的位数
 	if bits != 8*IPv4len && bits != 8*IPv6len {
 		return nil
 	}
