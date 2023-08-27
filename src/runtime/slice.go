@@ -11,9 +11,9 @@ import (
 )
 
 type slice struct {
-	array unsafe.Pointer
-	len   int
-	cap   int
+	array unsafe.Pointer // 指针，其值为实际存储数据的数组首地址
+	len   int            // 长度，该切片实际存储数据的长度
+	cap   int            // 容量，该切片在不扩容的情况下能够存储的数据长度
 }
 
 // A notInHeapSlice is a slice backed by go:notinheap memory.
@@ -81,13 +81,10 @@ func makeslicecopy(et *_type, tolen int, fromlen int, from unsafe.Pointer) unsaf
 }
 
 func makeslice(et *_type, len, cap int) unsafe.Pointer {
+	// Slice 的元素大小乘以容量
 	mem, overflow := math.MulUintptr(et.size, uintptr(cap))
 	if overflow || mem > maxAlloc || len < 0 || len > cap {
-		// NOTE: Produce a 'len out of range' error instead of a
-		// 'cap out of range' error when someone does make([]T, bignumber).
-		// 'cap out of range' is true too, but since the cap is only being
-		// supplied implicitly, saying len is clearer.
-		// See golang.org/issue/4085.
+		// 判断是否需要分配的内存地址超过最大值、内存超过了最大分配内存等
 		mem, overflow := math.MulUintptr(et.size, uintptr(len))
 		if overflow || mem > maxAlloc || len < 0 {
 			panicmakeslicelen()
@@ -159,6 +156,10 @@ func panicunsafeslicelen() {
 // to calculate where to write new values during an append.
 // TODO: When the old backend is gone, reconsider this decision.
 // The SSA backend might prefer the new length or to return only ptr/cap and save stack space.
+// Growslice 在追加期间处理切片增长。它传递切片元素类型、旧切片和所需的新最小容量，并返回至少具有该容量的新切片，并将旧数据复制到其中。
+// 新切片的长度设置为旧切片的长度，而不是新请求的容量。这是为了代码生成方便。旧切片的长度将立即用于计算追加期间写入新值的位置。
+// TODO：当旧的后端消失时，重新考虑这个决定。SSA 后端可能更喜欢新的长度，或者只返回 ptrcap 并节省堆栈空间。
+// 元素类型、旧切片、新切片的最小容量(也即新切片的长度)
 func growslice(et *_type, old slice, cap int) slice {
 	if raceenabled {
 		callerpc := getcallerpc()
@@ -168,60 +169,62 @@ func growslice(et *_type, old slice, cap int) slice {
 		msanread(old.array, uintptr(old.len*int(et.size)))
 	}
 
+	// 新的容量小于老的容量时，直接panic
 	if cap < old.cap {
 		panic(errorString("growslice: cap out of range"))
 	}
 
+	// 元素大小为 0 时，直接返回一个 nil 切片
 	if et.size == 0 {
-		// append should not create a slice with nil pointer but non-zero len.
-		// We assume that append doesn't need to preserve old.array in this case.
+		// 追加不应创建具有 nil 指针但非零长度的切片
+		// 假设在这种情况下，append 不需要保留 old.array。
 		return slice{unsafe.Pointer(&zerobase), old.len, cap}
 	}
 
 	newcap := old.cap
 	doublecap := newcap + newcap
 	if cap > doublecap {
+		// 如果需要的容量大于旧容量的两倍，则新容量直接为该容量
 		newcap = cap
 	} else {
+		// 需要的容量小于或等于旧容量的两倍
 		if old.cap < 1024 {
+			// 旧容量小于 1024 时，则新容量直接为旧容量的两倍
 			newcap = doublecap
 		} else {
-			// Check 0 < newcap to detect overflow
-			// and prevent an infinite loop.
+			// 旧容量大于或等于1024
 			for 0 < newcap && newcap < cap {
+				// 直接对旧容量连续多次 1.25 倍进行扩容，直至大于需要的容量
 				newcap += newcap / 4
 			}
-			// Set newcap to the requested cap when
-			// the newcap calculation overflowed.
+			// 如果计算出的新容量小于或等于0时，直接令其为需要的容量
 			if newcap <= 0 {
 				newcap = cap
 			}
 		}
 	}
 
+	// 计算出是否内存溢出、旧长度的内存大小、新长度的内存大小、新容量的内存大小、分配内存后的新容量
 	var overflow bool
 	var lenmem, newlenmem, capmem uintptr
-	// Specialize for common values of et.size.
-	// For 1 we don't need any division/multiplication.
-	// For sys.PtrSize, compiler will optimize division/multiplication into a shift by a constant.
-	// For powers of 2, use a variable shift.
 	switch {
-	case et.size == 1:
+	case et.size == 1: // 对于 1，不需要任何除法乘法
 		lenmem = uintptr(old.len)
 		newlenmem = uintptr(cap)
-		capmem = roundupsize(uintptr(newcap))
+		capmem = roundupsize(uintptr(newcap)) // 返回 mallocgc 将在请求大小时分配的内存块的大小
 		overflow = uintptr(newcap) > maxAlloc
 		newcap = int(capmem)
-	case et.size == sys.PtrSize:
+	case et.size == sys.PtrSize: // 对于PtrSize，编译器将优化除法乘法为一个常数的移位
 		lenmem = uintptr(old.len) * sys.PtrSize
 		newlenmem = uintptr(cap) * sys.PtrSize
 		capmem = roundupsize(uintptr(newcap) * sys.PtrSize)
 		overflow = uintptr(newcap) > maxAlloc/sys.PtrSize
+		// 在内存分配、对齐后，实际分配的内存大小存储的元素可能大于 newcap，所以此处需要重新赋值
 		newcap = int(capmem / sys.PtrSize)
-	case isPowerOfTwo(et.size):
+	case isPowerOfTwo(et.size): // 对于 2 的幂，直接使用位运算
 		var shift uintptr
 		if sys.PtrSize == 8 {
-			// Mask shift for better code generation.
+			// 计算出 et.size 的值用二进制表示时，最右侧 1 的位置
 			shift = uintptr(sys.Ctz64(uint64(et.size))) & 63
 		} else {
 			shift = uintptr(sys.Ctz32(uint32(et.size))) & 31
@@ -253,6 +256,7 @@ func growslice(et *_type, old slice, cap int) slice {
 	//   print(len(s), "\n")
 	// }
 	if overflow || capmem > maxAlloc {
+		// 有内存溢出直接 panic
 		panic(errorString("growslice: cap out of range"))
 	}
 
@@ -276,6 +280,7 @@ func growslice(et *_type, old slice, cap int) slice {
 	return slice{p, old.len, newcap}
 }
 
+// 通过位的运算符判断一个无符号整数 x 是否为2的幂
 func isPowerOfTwo(x uintptr) bool {
 	return x&(x-1) == 0
 }
