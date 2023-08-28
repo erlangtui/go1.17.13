@@ -382,12 +382,12 @@ type mSpanList struct {
 
 //go:notinheap
 type mspan struct {
-	next *mspan     // next span in list, or nil if none
-	prev *mspan     // previous span in list, or nil if none
-	list *mSpanList // For debugging. TODO: Remove.
+	next *mspan     // 链表中的下一个元素，或是 nil
+	prev *mspan     // 链表中的上一个元素，或是 nil
+	list *mSpanList // 用于debug. TODO: Remove.
 
-	startAddr uintptr // address of first byte of span aka s.base()
-	npages    uintptr // number of pages in span
+	startAddr uintptr // 起始地址，address of first byte of span aka s.base()
+	npages    uintptr // 页面数量，number of pages in span
 
 	manualFreeList gclinkptr // list of free objects in mSpanManual spans
 
@@ -406,9 +406,13 @@ type mspan struct {
 	// undefined and should never be referenced.
 	//
 	// Object n starts at address n*elemsize + (start << pageShift).
+	// 开始扫描时的空闲对象索引
+	// 每次分配从 freeindex 开始扫描 allocBits, 直到遇到表示空闲对象的 0, 然后调整 freeindex 的值
+	// 如果 freeindex == nelem, 当前 span 已经没有空闲对象了
 	freeindex uintptr
 	// TODO: Look up nelems from sizeclass and remove this field if it
 	// helps performance.
+	// span 内存储的对象数量
 	nelems uintptr // number of object in the span.
 
 	// Cache of the allocBits at freeindex. allocCache is shifted

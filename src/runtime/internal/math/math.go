@@ -8,8 +8,7 @@ import "runtime/internal/sys"
 
 const MaxUintptr = ^uintptr(0)
 
-// MulUintptr returns a * b and whether the multiplication overflowed.
-// On supported platforms this is an intrinsic lowered by the compiler.
+//MulUintptr 返回 a * b 的结果是否溢出。在支持的平台上，这是编译器降低的内在因素。
 func MulUintptr(a, b uintptr) (uintptr, bool) {
 	if a|b < 1<<(4*sys.PtrSize) || a == 0 {
 		return a * b, false
