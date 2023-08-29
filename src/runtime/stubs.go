@@ -66,6 +66,13 @@ func badsystemstack() {
 	write(2, sp.str, int32(sp.len))
 }
 
+
+// memclrNoHeapPointers 清除从 ptr 开始的 n 个字节。通常你应该使用typedmemclr。
+// memclrNoHeapPointer 应仅在调用方知道 ptr 不包含堆指针时使用，
+// 因为：PTR 是初始化的内存，其类型是无指针的，或者 PTR 是未初始化的内存（例如，正在为新分配重用的内存），因此仅包含“垃圾”。
+// memclrNoHeapPointer 确保如果 ptr 是指针对齐的，并且 n 是指针大小的倍数，则任何指针对齐的指针大小的部分都会以原子方式清除。
+// 尽管有函数名称，但这仍然是必需的，因为此函数是typedmemclr和memclrHasPointers的基础实现。
+// 有关更多详细信息，请参阅memmove的文档。此函数的（特定于 CPU 的）实现采用 memclr_.s 格式。
 // memclrNoHeapPointers clears n bytes starting at ptr.
 //
 // Usually you should use typedmemclr. memclrNoHeapPointers should be

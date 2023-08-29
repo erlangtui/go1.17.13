@@ -615,6 +615,8 @@ func bulkBarrierPreWrite(dst, src, size uintptr) {
 	}
 }
 
+// bulkBarrierPreWriteSrcOnly 类似于 bulkBarrierPreWrite，
+// 但不执行 [dst， dst+size ] 的写入屏障。除了 bulkBarrierPreWrite 的要求外，调用方还需要确保 [dst， dst+size） 归零。这用于特殊情况，例如 dst 刚刚创建并使用 malloc 归零。
 // bulkBarrierPreWriteSrcOnly is like bulkBarrierPreWrite but
 // does not execute write barriers for [dst, dst+size).
 //

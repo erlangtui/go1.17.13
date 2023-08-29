@@ -188,6 +188,7 @@ func gcenable() {
 
 // Garbage collector phase.
 // Indicates to write barrier and synchronization task to perform.
+// 垃圾回收器阶段。指示要执行的写入屏障和同步任务。
 var gcphase uint32
 
 // The compiler knows about this variable.

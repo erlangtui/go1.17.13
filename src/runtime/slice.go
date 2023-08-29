@@ -234,7 +234,7 @@ func growslice(et *_type, old slice, cap int) slice {
 		capmem = roundupsize(uintptr(newcap) << shift)
 		overflow = uintptr(newcap) > (maxAlloc >> shift)
 		newcap = int(capmem >> shift)
-	default:
+	default: // 对于其他长度，直接使用乘除法
 		lenmem = uintptr(old.len) * et.size
 		newlenmem = uintptr(cap) * et.size
 		capmem, overflow = math.MulUintptr(et.size, uintptr(newcap))
@@ -261,20 +261,19 @@ func growslice(et *_type, old slice, cap int) slice {
 	}
 
 	var p unsafe.Pointer
-	if et.ptrdata == 0 {
+	if et.ptrdata == 0 { // 元素类型中没有指针
 		p = mallocgc(capmem, nil, false)
-		// The append() that calls growslice is going to overwrite from old.len to cap (which will be the new length).
-		// Only clear the part that will not be overwritten.
+		// 分配 capmem 内存，并清除从 newlenmem 到 capmem 的内容
 		memclrNoHeapPointers(add(p, newlenmem), capmem-newlenmem)
 	} else {
-		// Note: can't use rawmem (which avoids zeroing of memory), because then GC can scan uninitialized memory.
+		// 注意：不能使用 rawmem（这样可以避免内存归零），因为这样 GC 可以扫描未初始化的内存。
 		p = mallocgc(capmem, et, true)
 		if lenmem > 0 && writeBarrier.enabled {
-			// Only shade the pointers in old.array since we know the destination slice p
-			// only contains nil pointers because it has been cleared during alloc.
+			// 只在 old.array 中对指针进行着色，因为目标切片 p 只包含 nil 指针，它在分配期间已被清除。
 			bulkBarrierPreWriteSrcOnly(uintptr(p), uintptr(old.array), lenmem-et.size+et.ptrdata)
 		}
 	}
+	// 内存迁移，从旧的数组迁移到新的数组
 	memmove(p, old.array, lenmem)
 
 	return slice{p, old.len, newcap}

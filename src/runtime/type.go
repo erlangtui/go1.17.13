@@ -29,22 +29,20 @@ const (
 // ../reflect/type.go:/^type.rtype.
 // ../internal/reflectlite/type.go:/^type.rtype.
 type _type struct {
-	size       uintptr
-	ptrdata    uintptr // size of memory prefix holding all pointers
-	hash       uint32
-	tflag      tflag
-	align      uint8
-	fieldAlign uint8
-	kind       uint8
-	// function for comparing objects of this type
-	// (ptr to object A, ptr to object B) -> ==?
-	equal func(unsafe.Pointer, unsafe.Pointer) bool
-	// gcdata stores the GC type data for the garbage collector.
-	// If the KindGCProg bit is set in kind, gcdata is a GC program.
-	// Otherwise it is a ptrmask bitmap. See mbitmap.go for details.
-	gcdata    *byte
-	str       nameOff
-	ptrToThis typeOff
+	// 对于结构体类型，ptrdata 表示结构体中所有带有指针类型的字段的总大小。
+	// 对于其他类型（如数组、切片、Map 和 Channel），ptrdata 表示类型本身的指针部分大小。
+	// 通过使用 ptrdata 字段，垃圾回收器可以根据类型的具体布局，有效地确定对象中的指针位置，并进行必要的内存回收操作。
+	size       uintptr                                   // 类型的大小（字节）
+	ptrdata    uintptr                                   // 前缀内存中保存所有指针的大小
+	hash       uint32                                    // 类型的哈希值
+	tflag      tflag                                     // 类型的标记信息
+	align      uint8                                     // 类型的对齐方式，单位字节
+	fieldAlign uint8                                     // 字段的对齐方式，单位字节
+	kind       uint8                                     // 类型的种类
+	equal      func(unsafe.Pointer, unsafe.Pointer) bool // 函数指针，用于比较两个指针指向的对象是否相等
+	gcdata     *byte                                     // 存储垃圾回收器的 GC 类型数据。如果 KindGCProg 位设置为实物，则 gcdata 是一个 GC 程序。否则，它是 ptrmask 位图。有关详细信息，请参阅 mbitmap.go。
+	str        nameOff                                   // 类型的名称偏移量
+	ptrToThis  typeOff                                   // 指向该类型的指针的类型偏移量
 }
 
 func (t *_type) string() string {
