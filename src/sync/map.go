@@ -9,76 +9,41 @@ import (
 	"unsafe"
 )
 
-// Map is like a Go map[interface{}]interface{} but is safe for concurrent use
-// by multiple goroutines without additional locking or coordination.
-// Loads, stores, and deletes run in amortized constant time.
-//
-// The Map type is specialized. Most code should use a plain Go map instead,
-// with separate locking or coordination, for better type safety and to make it
-// easier to maintain other invariants along with the map content.
-//
-// The Map type is optimized for two common use cases: (1) when the entry for a given
-// key is only ever written once but read many times, as in caches that only grow,
-// or (2) when multiple goroutines read, write, and overwrite entries for disjoint
-// sets of keys. In these two cases, use of a Map may significantly reduce lock
-// contention compared to a Go map paired with a separate Mutex or RWMutex.
-//
-// The zero Map is empty and ready for use. A Map must not be copied after first use.
 // Map 类似于 Go map[interface{}]interface{}，但可以安全地由多个 goroutines 并发使用，无需额外的锁定或协调。
-// 加载、存储和删除在摊销的常量时间内运行。地图类型是专用的。大多数代码应改用纯 Go 映射，具有单独的锁定或协调，以提高类型安全性，并更轻松地维护其他不变量以及映射内容。
+// 加载、存储和删除在摊销的常量时间内运行。
+// Map 类型是专用的。大多数代码应改用纯 Go 映射，具有单独的锁定或协调，以提高类型安全性，并更轻松地维护其他不变量以及映射内容。
 // Map 类型针对两种常见用例进行了优化：
 // （1） 当给定键的条目只写入一次但读取多次时，例如在仅增长的缓存中，
-// （2） 当多个 goroutine读取、写入和覆盖不相交键集的条目时。
-// 在这两种情况下，与与单独的 Mutex 或 RWMutex 配对的 Go 映射相比，使用 Map 可以显著减少锁争用。零映射为空，可供使用。地图在首次使用后不得复制。
+// （2） 当多个 goroutine 读取、写入和覆盖不相交键集的条目时。
+// 在这两种情况下，与与单独的 Mutex 或 RWMutex 配对的 Go 映射相比，使用 Map 可以显著减少锁争用。
+// 零 Map 为空，可供使用, Map 在首次使用后不得复制。
 // 当 dirty 为 nil 的时候，read 就代表 map 所有的数据；当 dirty 不为 nil 的时候，dirty 才代表 map 所有的数据。
 type Map struct {
 	mu Mutex
 
-	// read contains the portion of the map's contents that are safe for
-	// concurrent access (with or without mu held).
-	//
-	// The read field itself is always safe to load, but must only be stored with
-	// mu held.
-	//
-	// Entries stored in read may be updated concurrently without mu, but updating
-	// a previously-expunged entry requires that the entry be copied to the dirty
-	// map and unexpunged with mu held.
 	// read 包含映射内容中可安全并发访问的部分（保留或不保留 MU）。read 字段本身始终可以安全加载，但只能与 mu 一起存储。
-	// 存储在 read 中的条目可以在没有 mu 的情况下同时更新，但更新以前删除的条目需要将该条目复制到 dirty 中，并在保留 mu 的情况下取消删除。
+	// 存储在 read 中的条目可以在没有 mu 的情况下同时更新，但更新以前删除的条目需要将该条目复制到 dirty map 中，并在保留 mu 的情况下取消删除。
 	read atomic.Value // 存储 readOnly 结构体类型
 
-	// dirty contains the portion of the map's contents that require mu to be
-	// held. To ensure that the dirty map can be promoted to the read map quickly,
-	// it also includes all of the non-expunged entries in the read map.
-	//
-	// Expunged entries are not stored in the dirty map. An expunged entry in the
-	// clean map must be unexpunged and added to the dirty map before a new value
-	// can be stored to it.
-	//
-	// If the dirty map is nil, the next write to the map will initialize it by
-	// making a shallow copy of the clean map, omitting stale entries.
-	// dirty 包含映射内容中需要保留 MU 的部分。为了确保 dirty 映射可以快速提升为读取映射，它还包括 read 映射中所有未删除的条目。
-	// 删除的条目不会存储在 dirty 中。清理映射中已清除的条目必须取消删除并添加到脏映射中，然后才能将新值存储到 dirty 映射中。
+	// dirty 包含 map 中需要保留 MU 的部分。为了确保 dirty map 可以快速提升为 read map，它还包括 read map 中所有未删除的条目。
+	// 删除的条目不会存储在 dirty 中。清理 map 中已清除的条目必须取消删除并添加到 dirty map 中，然后才能将新值存储到 dirty map 中。
 	// 如果 dirty 为 nil，则下次写入映射时将通过创建干净映射的浅拷贝来初始化它，省略过时的条目。
 	dirty map[interface{}]*entry
 
-	// misses counts the number of loads since the read map was last updated that
-	// needed to lock mu to determine whether the key was present.
-	//
+
 	// Once enough misses have occurred to cover the cost of copying the dirty
 	// map, the dirty map will be promoted to the read map (in the unamended
 	// state) and the next store to the map will make a new dirty copy.
-	// misses 计算自上次更新读取映射以来需要锁定 MU 以确定 key 是否存在的负载数。
-	// 一旦发生足够的未命中以支付复制脏地图的成本，脏地图将被提升为读取地图（处于未修改状态），地图的下一个存储将制作新的脏副本。
+	// misses 计算自上次更新 read map 以来需要锁定 MU 以确定 key 是否存在的负载数。
+	// 一旦 misses 足够支付复制 dirty map 的成本，dirty map 将被提升为 read map（处于未修改状态），map 的下一个存储将创建一个新的 dirty 副本。
 	misses int // 加锁则计数
 }
 
-// readOnly is an immutable struct stored atomically in the Map.read field.
 // readOnly 是以原子方式存储在 Map.read 字段中的不可变结构
 type readOnly struct {
 	m       map[interface{}]*entry
 	// 如果 dirty map 包含了不在 m 中的键，则为 true
-	amended bool // true if the dirty map contains some key not in m.
+	amended bool
 }
 
 // expunged is an arbitrary pointer that marks entries which have been deleted

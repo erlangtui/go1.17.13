@@ -11,61 +11,46 @@ import (
 	"unsafe"
 )
 
-// A Pool is a set of temporary objects that may be individually saved and
-// retrieved.
+// 池是一组可以单独保存和检索的临时对象
+// 存储在池中的任何项目都可能随时自动删除，恕不另行通知。发生这种情况时如果池保存唯一的引用，则可能会解除分配该项目。
 //
-// Any item stored in the Pool may be removed automatically at any time without
-// notification. If the Pool holds the only reference when this happens, the
-// item might be deallocated.
-//
-// A Pool is safe for use by multiple goroutines simultaneously.
-//
-// Pool's purpose is to cache allocated but unused items for later reuse,
-// relieving pressure on the garbage collector. That is, it makes it easy to
-// build efficient, thread-safe free lists. However, it is not suitable for all
-// free lists.
-//
-// An appropriate use of a Pool is to manage a group of temporary items
-// silently shared among and potentially reused by concurrent independent
-// clients of a package. Pool provides a way to amortize allocation overhead
-// across many clients.
-//
-// An example of good use of a Pool is in the fmt package, which maintains a
-// dynamically-sized store of temporary output buffers. The store scales under
-// load (when many goroutines are actively printing) and shrinks when
-// quiescent.
-//
-// On the other hand, a free list maintained as part of a short-lived object is
-// not a suitable use for a Pool, since the overhead does not amortize well in
-// that scenario. It is more efficient to have such objects implement their own
-// free list.
-//
-// A Pool must not be copied after first use.
+// 池是多线程安全的
+// 池的目的是缓存已分配但未使用的项目以供以后重用，从而减轻垃圾回收器的压力。
+// 它可以轻松构建高效、线程安全的空闲列表。但是，它并不适合所有免费列表。
+// 池的适当用法是管理一组临时项目，这些项目在包的并发独立客户端之间静默共享并可能由这些临时客户端重用。
+// 池提供了一种在多个客户端之间摊销分配开销的方法。
+// 很好地使用池的一个示例是 fmt 包，它维护一个动态大小的临时输出缓冲区存储。
+// 存储在负载下缩放（当许多 goroutines 主动打印时）并在静止时收缩。
+// 另一方面，作为短期对象的一部分维护的空闲列表不适合用于池，因为在这种情况下开销不能很好地摊销。
+// 让此类对象实现自己的自由列表会更有效。
+// 首次使用后不得复制池。
 type Pool struct {
+	// 不消耗内存仅用于静态分析的结构，保证一个对象在第一次使用后不会发生复制
 	noCopy noCopy
 
-	local     unsafe.Pointer // local fixed-size per-P pool, actual type is [P]poolLocal
-	localSize uintptr        // size of the local array
+	// 固定大小的每 P 池，实际类型为 [P]poolLocal 切片的指针，多个 goroutine 使用同一个 Pool 时，减少了竞争，提升了性能。
+	local     unsafe.Pointer
+	// 本地队列 [P]poolLocal 的大小
+	localSize uintptr
 
+	// 在一轮 GC 到来时，victim 和 victimSize 会分别“接管” local 和 localSize。victim 的机制用于减少 GC 后冷启动导致的性能抖动，让分配对象更平滑。
 	victim     unsafe.Pointer // local from previous cycle
 	victimSize uintptr        // size of victims array
 
-	// New optionally specifies a function to generate
-	// a value when Get would otherwise return nil.
-	// It may not be changed concurrently with calls to Get.
+	// 指定一个函数，用于在 Get 否则返回 nil 时生成值，不能与调用 Get 同时更改。
 	New func() interface{}
 }
 
 // Local per-P Pool appendix.
 type poolLocalInternal struct {
-	private interface{} // Can be used only by the respective P.
-	shared  poolChain   // Local P can pushHead/popHead; any P can popTail.
+	private interface{} // 只能由相应的 P 使用。
+	shared  poolChain   // 本地的 P 能够 pushHead/popHead; 其他 P popTail.
 }
 
 type poolLocal struct {
 	poolLocalInternal
 
-	// Prevents false sharing on widespread platforms with
+	// 防止在广泛的平台上进行虚假共享，cpu line
 	// 128 mod (cache line size) = 0 .
 	pad [128 - unsafe.Sizeof(poolLocalInternal{})%128]byte
 }
@@ -189,9 +174,7 @@ func (p *Pool) getSlow(pid int) interface{} {
 	return nil
 }
 
-// pin pins the current goroutine to P, disables preemption and
-// returns poolLocal pool for the P and the P's id.
-// Caller must call runtime_procUnpin() when done with the pool.
+// 将当前goroutine固定到P，禁用抢占并返回P的poolLocal pool和P的ID。调用方必须在处理完池后调用 runtime_procUnpin()
 func (p *Pool) pin() (*poolLocal, int) {
 	pid := runtime_procPin()
 	// In pinSlow we store to local and then to localSize, here we load in opposite order.
