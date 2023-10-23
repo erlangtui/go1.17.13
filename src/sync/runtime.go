@@ -48,10 +48,10 @@ func init() {
 }
 
 // Active spinning runtime support.
-// runtime_canSpin reports whether spinning makes sense at the moment.
+// runtime_canSpin 报道当前咨询是否有意义
 func runtime_canSpin(i int) bool
 
-// runtime_doSpin does active spinning.
+// runtime_doSpin 执行实际自旋
 func runtime_doSpin()
 
 func runtime_nanotime() int64

@@ -2,12 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package sync provides basic synchronization primitives such as mutual
-// exclusion locks. Other than the Once and WaitGroup types, most are intended
-// for use by low-level library routines. Higher-level synchronization is
-// better done via channels and communication.
-//
-// Values containing the types defined in this package should not be copied.
+// Package sync sync 包提供了基本的同步原，如互斥锁。除了 Once 和 WaitGroup 类型之外，大多数类型都是为低级库协程使用准备的。
+// 更高级别的同步最好通过通道和通信来完成。包含在此包中定义的类型的值不应该被复制。
 package sync
 
 import (
@@ -16,18 +12,15 @@ import (
 	"unsafe"
 )
 
-func throw(string) // provided by runtime
+func throw(string) // 为运行时准备
 
-// A Mutex is a mutual exclusion lock.
-// The zero value for a Mutex is an unlocked mutex.
-//
-// A Mutex must not be copied after first use.
+// Mutex 是互斥锁，其零值是未锁的状态，首次使用后不能被复制
 type Mutex struct {
 	state int32
 	sema  uint32
 }
 
-// A Locker represents an object that can be locked and unlocked.
+// Locker 表示一个可以加锁解锁的对象
 type Locker interface {
 	Lock()
 	Unlock()
@@ -39,36 +32,23 @@ const (
 	mutexStarving
 	mutexWaiterShift = iota
 
-	// Mutex fairness.
+	// Mutex 公平.
 	//
-	// Mutex can be in 2 modes of operations: normal and starvation.
-	// In normal mode waiters are queued in FIFO order, but a woken up waiter
-	// does not own the mutex and competes with new arriving goroutines over
-	// the ownership. New arriving goroutines have an advantage -- they are
-	// already running on CPU and there can be lots of them, so a woken up
-	// waiter has good chances of losing. In such case it is queued at front
-	// of the wait queue. If a waiter fails to acquire the mutex for more than 1ms,
-	// it switches mutex to the starvation mode.
-	//
-	// In starvation mode ownership of the mutex is directly handed off from
-	// the unlocking goroutine to the waiter at the front of the queue.
-	// New arriving goroutines don't try to acquire the mutex even if it appears
-	// to be unlocked, and don't try to spin. Instead they queue themselves at
-	// the tail of the wait queue.
-	//
-	// If a waiter receives ownership of the mutex and sees that either
-	// (1) it is the last waiter in the queue, or (2) it waited for less than 1 ms,
-	// it switches mutex back to normal operation mode.
-	//
-	// Normal mode has considerably better performance as a goroutine can acquire
-	// a mutex several times in a row even if there are blocked waiters.
-	// Starvation mode is important to prevent pathological cases of tail latency.
+	// Mutex 可以处于 2 种操作模式：正常和饥饿。
+	// 在正常模式下，等待者们按照先进先出的顺序排队，但是被唤醒的等待者不会拥有互斥锁，而是与新到来的协程竞争所有权。
+	// 新到来的goroutine有一个优势 - 它们已经在CPU上运行，并且可能有很多，所以醒来的等待者很有可能失败。
+	// 在这种情况下，它会在等待队列的前面排队。如果等待者超过 1 毫秒未能获取互斥锁，则会将互斥锁切换到饥饿模式。
+
+	// 在饥饿模式下，互斥锁的所有权直接从解锁协程移交给队列前面的等待者。
+	// 新到来的goroutines不会尝试获取互斥锁，即使它看起来已解锁，也不会尝试旋转。
+	// 相反，他们将自己排在等待队列的尾部。
+	// 如果等待者获得互斥锁的所有权，并看到（1）它是队列中的最后一个等待者，或（2）等待时间少于 1 毫秒，则会将互斥锁切换回正常操作模式。
+	// 正常模式具有更好的性能，因为即使有阻塞的等待者，goroutine也可以连续多次获取互斥锁。饥饿模式对于预防尾部延迟的病理性示例很重要。
+
 	starvationThresholdNs = 1e6
 )
 
-// Lock locks m.
-// If the lock is already in use, the calling goroutine
-// blocks until the mutex is available.
+// Lock 如果锁已经被使用了，则调用程序一直阻塞直到锁可用
 func (m *Mutex) Lock() {
 	// Fast path: grab unlocked mutex.
 	if atomic.CompareAndSwapInt32(&m.state, 0, mutexLocked) {
@@ -78,6 +58,7 @@ func (m *Mutex) Lock() {
 		return
 	}
 	// Slow path (outlined so that the fast path can be inlined)
+	// 慢速路径（概述以便可以内联快速路径）
 	m.lockSlow()
 }
 
@@ -88,8 +69,7 @@ func (m *Mutex) lockSlow() {
 	iter := 0
 	old := m.state
 	for {
-		// Don't spin in starvation mode, ownership is handed off to waiters
-		// so we won't be able to acquire the mutex anyway.
+		// 不要在饥饿模式下自旋，所有权会交给等待者，所以我们无论如何都无法获得互斥锁。
 		if old&(mutexLocked|mutexStarving) == mutexLocked && runtime_canSpin(iter) {
 			// Active spinning makes sense.
 			// Try to set mutexWoken flag to inform Unlock
