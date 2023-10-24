@@ -47,8 +47,7 @@ func init() {
 	runtime_notifyListCheck(unsafe.Sizeof(n))
 }
 
-// Active spinning runtime support.
-// runtime_canSpin 报道当前咨询是否有意义
+// runtime_canSpin 报道当前自旋是否有意义
 func runtime_canSpin(i int) bool
 
 // runtime_doSpin 执行实际自旋
