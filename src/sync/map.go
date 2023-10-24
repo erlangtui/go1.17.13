@@ -37,7 +37,7 @@ type Map struct {
 
 // readOnly 是以原子方式存储在 Map.read 字段中的不可变结构
 type readOnly struct {
-	m       map[interface{}]*entry
+	m map[interface{}]*entry
 	// 如果 dirty map 包含了不在 m 中的键，则为 true
 	amended bool
 }
@@ -116,7 +116,7 @@ func (m *Map) Store(key, value interface{}) {
 	} else { // 两个 map 都不在
 		if !read.amended { // dirty 中没有比 read 中多的 key，则向 dirty map 中加入该 key，并置 amended = true
 			// 表示往 dirty map 中第一次添加新 key
-			m.dirtyLocked() // dirty map 为空，则对 read map 进行浅拷贝
+			m.dirtyLocked()                                  // dirty map 为空，则对 read map 进行浅拷贝
 			m.read.Store(readOnly{m: read.m, amended: true}) // 更新 amended
 		}
 		m.dirty[key] = newEntry(value)
@@ -177,7 +177,7 @@ func (m *Map) LoadOrStore(key, value interface{}) (actual interface{}, loaded bo
 		if !read.amended {
 			// We're adding the first new key to the dirty map.
 			// Make sure it is allocated and mark the read-only map as incomplete.
-			m.dirtyLocked() // dirty map 为空则浅拷贝
+			m.dirtyLocked()                                  // dirty map 为空则浅拷贝
 			m.read.Store(readOnly{m: read.m, amended: true}) // 更新 amended
 		}
 		m.dirty[key] = newEntry(value)
@@ -199,7 +199,6 @@ func (e *entry) tryLoadOrStore(i interface{}) (actual interface{}, loaded, ok bo
 	if p != nil { // 值存在，直接返回该值
 		return *(*interface{})(p), true, true
 	}
-
 
 	// 在第一次加载后复制接口，使此方法更适合逃避分析：如果我们命中“load”路径或条目被删除，我们不应该费心分配堆。该值不存在，赋予新值
 	ic := i
@@ -266,9 +265,6 @@ func (e *entry) delete() (value interface{}, ok bool) {
 	}
 }
 
-// Range calls f sequentially for each key and value present in the map.
-// If f returns false, range stops the iteration.
-//
 // Range does not necessarily correspond to any consistent snapshot of the Map's
 // contents: no key will be visited more than once, but if the value for any key
 // is stored or deleted concurrently, Range may reflect any mapping for that key
@@ -276,7 +272,8 @@ func (e *entry) delete() (value interface{}, ok bool) {
 //
 // Range may be O(N) with the number of elements in the map even if f returns
 // false after a constant number of calls.
-// 对映射中存在的每个键和值按顺序调用 f。如果 f 返回 false，则范围停止迭代。
+
+// Range 对映射中存在的每个键和值按顺序调用 f。如果 f 返回 false，则 range 停止迭代。
 // Range 不一定对应于映射内容的任何一致快照：不会多次访问任何键，但如果同时存储或删除任何键的值，
 // 则 Range 可能会反映该键在 Range 调用期间从任何点开始的任何映射。
 // Range 可以是 O（N） 与映射中的元素数，即使 f 在恒定的调用次数后返回 false。
