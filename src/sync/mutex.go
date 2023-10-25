@@ -52,28 +52,29 @@ func (m *Mutex) Lock() {
 		}
 		return
 	}
-	// 慢速路径（概述以便可以内联快速路径）
+	// 当锁不是未锁定的状态时，慢速路径（概述以便可以内联快速路径）
 	m.lockSlow()
 }
 
 func (m *Mutex) lockSlow() {
 	var waitStartTime int64 // 等待时间
 	starving := false       // 是否处于饥饿模式
-	awoke := false          // 是否处于唤醒状态
+	awoke := false          // 是否有协程处于唤醒状态
 	iter := 0               // 自旋次数
 	old := m.state          // 锁的当前状态
 	for {
 		// 不要在饥饿模式下自旋，所有权会交给队列前面的等待者协程，所以我们无论如何都无法获得互斥锁。
 		if old&(mutexLocked|mutexStarving) == mutexLocked && runtime_canSpin(iter) {
 			// 如果是锁定状态且不是处于饥饿模式，并且符合自旋条件，则开始自旋
-			// 自旋之前，尝试设置 mutexWoken 标志位，以通知解锁操作不要唤醒其他被阻塞的 goroutine，这是为了避免不必要的唤醒和上下文切换
+			// 自旋之前，尝试设置 mutexWoken 标志位，以通知解锁操作不要唤醒其他被阻塞的 goroutine，避免不必要的唤醒和上下文切换
 			if !awoke && old&mutexWoken == 0 && old>>mutexWaiterShift != 0 &&
 				atomic.CompareAndSwapInt32(&m.state, old, old|mutexWoken) {
+				// 没有协程被唤醒、锁也不是唤醒状态、还有协程等待的协程，且当前协程能够将锁的状态更新为 mutexWoken
 				awoke = true
 			}
 			runtime_doSpin() // 开始自旋
-			iter++ // 自旋计数
-			old = m.state // 重新读取互斥锁的状态 m.state，为了在下一次循环中重新检查互斥锁的状态，并决定是否继续自旋
+			iter++           // 自旋计数
+			old = m.state    // 重新读取互斥锁的状态 m.state，为了在下一次循环中重新检查互斥锁的状态，并决定是否继续自旋
 			continue
 		}
 		new := old
