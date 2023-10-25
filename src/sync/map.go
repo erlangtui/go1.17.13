@@ -19,19 +19,22 @@ import (
 // 零 Map 为空，可供使用, Map 在首次使用后不得复制。
 // 当 dirty 为 nil 的时候，read 就代表 map 所有的数据；当 dirty 不为 nil 的时候，dirty 才代表 map 所有的数据。
 type Map struct {
-	mu Mutex
+	mu Mutex // 当写 read 或者读写 dirty 时，需要加互斥锁
 
-	// read 包含映射内容中可安全并发访问的部分（保留或不保留 MU）。read 字段本身始终可以安全加载，但只能与 mu 一起存储。
-	// 存储在 read 中的条目可以在没有 mu 的情况下同时更新，但更新以前删除的条目需要将该条目复制到 dirty map 中，并在保留 mu 的情况下取消删除。
+	// read 包含了 Map 中可安全并发访问的部分（无论是否有互斥锁 mu）
+	// read 字段本身始终可以安全的执行 load 操作，但 store 操作时必须和互斥锁 mu 一起。
+	// 存储在 read 中的值可以在没有 mu 的情况下并发更新，但更新以前删除的条目需要将该条目复制到 dirty map 中，并在保留 mu 的情况下取消删除
 	read atomic.Value // 存储 readOnly 结构体类型
 
-	// dirty 包含 map 中需要保留 MU 的部分。为了确保 dirty map 可以快速提升为 read map，它还包括 read map 中所有未删除的条目。
-	// 删除的条目不会存储在 dirty 中。清理 map 中已清除的条目必须取消删除并添加到 dirty map 中，然后才能将新值存储到 dirty map 中。
-	// 如果 dirty 为 nil，则下次写入映射时将通过创建干净映射的浅拷贝来初始化它，省略过时的条目。
+	// dirty 包含 Map 中需要持有 mu 才能访问的部分。为了确保 dirty map 可以快速提升为 read map，它还包括 read map 中所有未删除的条目。
+	// 被标记为 expunged 的元素不会存储在 dirty 中
+	// 被标记为 expunged 的元素如果要存储新的值，需要先执行 unexpunged 添加到 dirty, 然后再更新值
+	// 新添加的元素会优先放入 dirty map
+	// 如果 dirty 为 nil，则下次写入 Map 时将通过浅拷贝一个空的 map 来初始化它，忽略的条目。
 	dirty map[interface{}]*entry
 
-	// misses 计算自上次更新 read map 以来需要锁定 MU 以确定 key 是否存在的负载数。
-	// 一旦 misses 足够支付复制 dirty map 的成本，dirty map 将被提升为 read map（处于未修改状态），map 的下一个存储将创建一个新的 dirty 副本。
+	// misses 计算自上次更新 read map 以来需要锁定 mu 以确定 key 是否存在的负载数。
+	// 一旦 misses  dirty map 的成本，dirty map 将被提升为 read map（处于未修改状态），map 的下一个存储将创建一个新的 dirty 副本。
 	misses int // 加锁则计数，查询dirty时需要加锁
 }
 
