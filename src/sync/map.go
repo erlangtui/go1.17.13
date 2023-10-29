@@ -119,7 +119,7 @@ func (m *Map) Store(key, value interface{}) {
 		e.storeLocked(&value) // 更新 entry 中 p 所指向的 value
 	} else if e, ok := m.dirty[key]; ok { // 只在 dirty map 中，直接修改
 		e.storeLocked(&value)
-	} else { // 两个 map 都不在
+	} else {               // 两个 map 都不在
 		if !read.amended { // dirty 中没有比 read 中多的 key，则向 dirty map 中加入该 key，并置 amended = true
 			// 表示往 dirty map 中第一次添加新 key
 			m.dirtyLocked()                                  // dirty map 为空，则对 read map 进行浅拷贝
@@ -263,7 +263,8 @@ func (e *entry) delete() (value interface{}, ok bool) {
 			return nil, false
 		}
 		// 将 p 置为 nil，m.dirty == nil 或 m.dirty[key] 为 e
-		// 当 p 为 expunged 时，表示它已经不在 dirty 中了。这是 p 的状态机决定的，在 tryExpungeLocked 函数中，会将 nil 原子地设置成 expunged
+		// 当 p 为 expunged 时，表示它已经不在 dirty 中了。
+		// 这是 p 的状态机决定的，在 tryExpungeLocked 函数中，会将 nil 原子地设置成 expunged
 		if atomic.CompareAndSwapPointer(&e.p, p, nil) {
 			return *(*interface{})(p), true
 		}
@@ -324,6 +325,8 @@ func (m *Map) dirtyLocked() {
 	read, _ := m.read.Load().(readOnly)
 	m.dirty = make(map[interface{}]*entry, len(read.m))
 	for k, e := range read.m {
+		// 在拷贝 read map 时，将为 nil 的 entry 设为 expunged
+		// 以便再次写入时，可以添加到 dirty map 时能够同步更新 read map 中的 entry
 		if !e.tryExpungeLocked() { // 判断是否被删除
 			// 只拷贝未删除的
 			m.dirty[k] = e
