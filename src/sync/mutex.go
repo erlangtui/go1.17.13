@@ -78,7 +78,7 @@ func (m *Mutex) lockSlow() {
 			continue
 		}
 		new := old
-		// 不要试图获取饥饿的互斥锁，新到的goroutines必须排队。
+		// 不要试图获取饥饿模式下的互斥锁，新到的goroutines必须排队。
 		if old&mutexStarving == 0 {
 			new |= mutexLocked
 		}
