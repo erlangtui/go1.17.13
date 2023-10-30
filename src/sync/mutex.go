@@ -78,17 +78,21 @@ func (m *Mutex) lockSlow() {
 			continue
 		}
 		new := old
-		// 不要试图获取饥饿模式下的互斥锁，新到的goroutines必须排队。
+		// 新到的goroutines不要试图获取饥饿模式下的互斥锁，必须排队
 		if old&mutexStarving == 0 {
+			// 互斥锁非饥饿模式，则 goroutine 加锁
 			new |= mutexLocked
 		}
 		if old&(mutexLocked|mutexStarving) != 0 {
+			// 互斥锁饥饿模式或已经是加锁状态，则 goroutine 增加等待的 goroutines 数量
 			new += 1 << mutexWaiterShift
 		}
 		// The current goroutine switches mutex to starvation mode.
 		// But if the mutex is currently unlocked, don't do the switch.
 		// Unlock expects that starving mutex has waiters, which will not
 		// be true in this case.
+		// 当前的 goroutine 将互斥锁切换到饥饿模式。
+		// 但是，如果互斥锁当前已解锁，请不要进行切换。Unlock 期望饥饿的互斥锁有服务员，在这种情况下并非如此。
 		if starving && old&mutexLocked != 0 {
 			new |= mutexStarving
 		}
