@@ -13,10 +13,9 @@ import "unsafe"
 // library and should not be used directly.
 func runtime_Semacquire(s *uint32)
 
-// SemacquireMutex is like Semacquire, but for profiling contended Mutexes.
-// If lifo is true, queue waiter at the head of wait queue.
-// skipframes is the number of frames to omit during tracing, counting from
-// runtime_SemacquireMutex's caller.
+// SemacquireMutex 与 Semacquire 类似，但用于分析有争议的互斥锁。
+// 如果 lifo 为 true，则将 waiter 排在等待队列的前面。
+// skipframes 是在跟踪过程中要省略的帧数，从 runtime_SemacquireMutex 的调用方开始计数。
 func runtime_SemacquireMutex(s *uint32, lifo bool, skipframes int)
 
 // Semrelease atomically increments *s and notifies a waiting goroutine
@@ -47,7 +46,7 @@ func init() {
 	runtime_notifyListCheck(unsafe.Sizeof(n))
 }
 
-// runtime_canSpin 报道当前自旋是否有意义
+// runtime_canSpin 报道当前自旋是否有意义，链接到 runtime 中的 sync_runtime_canSpin 函数
 func runtime_canSpin(i int) bool
 
 // runtime_doSpin 执行实际自旋

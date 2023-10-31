@@ -6359,18 +6359,21 @@ func sync_atomic_runtime_procUnpin() {
 	procUnpin()
 }
 
-// Active spinning for sync.Mutex.
+// 用于 sync.Mutex 的主动自旋。
 //go:linkname sync_runtime_canSpin sync.runtime_canSpin
 //go:nosplit
+// Go 调度器的设计者考虑了 操作的资源利用率 和 频繁的线程抢占给操作系统带来的负载 之后，提出了 自旋线程 的概念。
+// 当 自旋线程 没有找到可供其调度执行的 goroutine 时，并不会销毁该线程，而是采取 自旋 的操作保存起来。
+// 虽然直观上看起来浪费了一些资源，但是考虑一下 syscall (系统调用) 相关的情景就可以发现，相比 自旋 来说，线程间频繁的抢占、创建、销毁等操作带来的负载会更高。
 func sync_runtime_canSpin(i int) bool {
-	// sync.Mutex is cooperative, so we are conservative with spinning.
-	// Spin only few times and only if running on a multicore machine and
-	// GOMAXPROCS>1 and there is at least one other running P and local runq is empty.
-	// As opposed to runtime mutex we don't do passive spinning here,
-	// because there can be work on global runq or on other Ps.
+	// 自旋与互斥锁相反，不做被动等待，直接主动原地旋转等待，因为自旋可以在全局运行队列或者其他运行队列上面运行
+	// 1，自旋次数要大于 4 次，防止某个 goroutine 长时间占用 CPU 资源导致其他 goroutine 长时间被阻塞；
+	// 2，CPU 核数要大于 1，单核没法自旋；
+	// 3，设置的 P 的最大数要大于空闲 P 的数量+自旋 P 的数量+1，表示当前 goroutine 可以自旋等待一个新的 P ；
 	if i >= active_spin || ncpu <= 1 || gomaxprocs <= int32(sched.npidle+sched.nmspinning)+1 {
 		return false
 	}
+	// 4，当前 goroutine 所在的 P 的本地队列（run queue）要为空，防止当前 goroutine 可以从自己所在的 P 的本地队列中获取任务而不必自旋等待
 	if p := getg().m.p.ptr(); !runqempty(p) {
 		return false
 	}
