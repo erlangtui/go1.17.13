@@ -6367,7 +6367,7 @@ func sync_atomic_runtime_procUnpin() {
 // 虽然直观上看起来浪费了一些资源，但是考虑一下 syscall (系统调用) 相关的情景就可以发现，相比 自旋 来说，线程间频繁的抢占、创建、销毁等操作带来的负载会更高。
 func sync_runtime_canSpin(i int) bool {
 	// 自旋与互斥锁相反，不做被动等待，直接主动原地旋转等待，因为自旋可以在全局运行队列或者其他运行队列上面运行
-	// 1，自旋次数要大于 4 次，防止某个 goroutine 长时间占用 CPU 资源导致其他 goroutine 长时间被阻塞；
+	// 1，尝试自旋次数要小于 4 次，防止某个 goroutine 长时间占用 CPU 资源导致其他 goroutine 长时间被阻塞；
 	// 2，CPU 核数要大于 1，单核没法自旋；
 	// 3，设置的 P 的最大数要大于空闲 P 的数量+自旋 P 的数量+1，表示当前 goroutine 可以自旋等待一个新的 P ；
 	if i >= active_spin || ncpu <= 1 || gomaxprocs <= int32(sched.npidle+sched.nmspinning)+1 {
@@ -6383,6 +6383,7 @@ func sync_runtime_canSpin(i int) bool {
 //go:linkname sync_runtime_doSpin sync.runtime_doSpin
 //go:nosplit
 func sync_runtime_doSpin() {
+	// TEXT runtime·procyield(SB)，并执行 30 次的 PAUSE 指令，该指令只会占用 CPU 并消耗 CPU 时间
 	procyield(active_spin_cnt)
 }
 
