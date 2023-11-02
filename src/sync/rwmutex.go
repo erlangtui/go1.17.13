@@ -10,27 +10,18 @@ import (
 	"unsafe"
 )
 
-// There is a modified copy of this file in runtime/rwmutex.go.
-// If you make any changes here, see if you should make them there.
-
-// A RWMutex is a reader/writer mutual exclusion lock.
-// The lock can be held by an arbitrary number of readers or a single writer.
-// The zero value for a RWMutex is an unlocked mutex.
-//
-// A RWMutex must not be copied after first use.
-//
-// If a goroutine holds a RWMutex for reading and another goroutine might
-// call Lock, no goroutine should expect to be able to acquire a read lock
-// until the initial read lock is released. In particular, this prohibits
-// recursive read locking. This is to ensure that the lock eventually becomes
-// available; a blocked Lock call excludes new readers from acquiring the
-// lock.
+// RWMutex runtimerwmutex.go 中有此文件的修改副本。如果您在此处进行任何更改，请查看是否应该在此处进行更改。
+// RWMutex 是一个读写器互斥锁。锁可以由任意数量的读取器或单个写入器持有。
+// RWMutex 的零值是解锁的互斥锁。RWMutex 在首次使用后不得复制。
+// 如果一个 goroutine 持有一个 RWMutex 进行读取，而另一个 goroutine 可能会调用 Lock，
+// 则在释放初始读锁之前，任何 goroutine 都不应期望能够获取读锁。特别是，这禁止递归读取锁定。
+// 这是为了确保锁最终可用;被阻止的 Lock 调用会阻止新读取器获取锁定。
 type RWMutex struct {
-	w           Mutex  // held if there are pending writers
-	writerSem   uint32 // semaphore for writers to wait for completing readers
-	readerSem   uint32 // semaphore for readers to wait for completing writers
-	readerCount int32  // number of pending readers
-	readerWait  int32  // number of departing readers
+	w           Mutex  // 互斥锁
+	writerSem   uint32 // 信号量，写等待读
+	readerSem   uint32 // 信号量，读等待写
+	readerCount int32  // 正在执行读操作的数量
+	readerWait  int32  // 写操作被阻塞时，读操作等待的数量
 }
 
 const rwmutexMaxReaders = 1 << 30
@@ -53,6 +44,9 @@ const rwmutexMaxReaders = 1 << 30
 // It should not be used for recursive read locking; a blocked Lock
 // call excludes new readers from acquiring the lock. See the
 // documentation on the RWMutex type.
+// 以下方法暂时禁用对争用同步事件的处理，以便向争用检测器提供上述更精确的模型。例如，原子。
+// RLock 中的 AddInt32 不应提供获取-释放语义，这会错误地同步赛车读取器，从而可能错过比赛。
+// RLock 锁定 rw 进行读取。它不应用于递归读锁定;被阻止的锁定调用会阻止新读取器获取锁定。请参阅有关 RWMutex 类型的文档。
 func (rw *RWMutex) RLock() {
 	if race.Enabled {
 		_ = rw.w.state
@@ -107,7 +101,7 @@ func (rw *RWMutex) Lock() {
 		_ = rw.w.state
 		race.Disable()
 	}
-	// First, resolve competition with other writers.
+	// 解决与其他写者的竞争，因为 RWMutex 的写锁是互斥的，只有一个写者可以持有写锁
 	rw.w.Lock()
 	// Announce to readers there is a pending writer.
 	r := atomic.AddInt32(&rw.readerCount, -rwmutexMaxReaders) + rwmutexMaxReaders
