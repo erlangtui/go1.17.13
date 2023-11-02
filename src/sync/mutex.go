@@ -85,7 +85,7 @@ func (m *Mutex) lockSlow() {
 			new |= mutexLocked
 		}
 		if old&(mutexLocked|mutexStarving) != 0 {
-			// 互斥锁饥饿模式或已经是加锁状态，则将 new 的 mutexWaiterShift 位置为 1（表示当前goroutine也成为Mutex的等待者）
+			// 互斥锁饥饿模式或已经是加锁状态，则将 new 的 mutexWaiterShift 开始的位置为 1（表示当前goroutine也成为Mutex的等待者）
 			new += 1 << mutexWaiterShift
 		}
 
