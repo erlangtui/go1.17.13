@@ -10,25 +10,21 @@ import (
 	"unsafe"
 )
 
-// A WaitGroup waits for a collection of goroutines to finish.
-// The main goroutine calls Add to set the number of
-// goroutines to wait for. Then each of the goroutines
-// runs and calls Done when finished. At the same time,
-// Wait can be used to block until all goroutines have finished.
-//
-// A WaitGroup must not be copied after first use.
+// WaitGroup 等待一组 goroutine 完成。
+// 主 goroutine 调用 Add 来设置要等待的 goroutine 数量。
+// 然后，每个 goroutine 都会运行，并在完成后调用 Done。
+// 同时，Wait 可用于阻塞，直到所有 goroutines 完成。
+// WaitGroup 首次使用后不允许被复制
 type WaitGroup struct {
 	noCopy noCopy
 
-	// 64-bit value: high 32 bits are counter, low 32 bits are waiter count.
-	// 64-bit atomic operations require 64-bit alignment, but 32-bit
-	// compilers do not ensure it. So we allocate 12 bytes and then use
-	// the aligned 8 bytes in them as state, and the other 4 as storage
-	// for the sema.
+	// 64 位值：高 32 位为计数器，低 32 位为 waiter 计数。
+	// 64 位原子操作需要 64 位对齐，但 32 位编译器不能确保这一点。
+	// 因此，我们分配 12 个字节，然后使用其中对齐的 8 个字节作为状态，另外 4 个字节作为 sema 的存储。
 	state1 [3]uint32
 }
 
-// state returns pointers to the state and sema fields stored within wg.state1.
+// state 返回指向存储在 wg.state1 中的 state 和 sema 字段的指针。
 func (wg *WaitGroup) state() (statep *uint64, semap *uint32) {
 	if uintptr(unsafe.Pointer(&wg.state1))%8 == 0 {
 		return (*uint64)(unsafe.Pointer(&wg.state1)), &wg.state1[2]
@@ -37,19 +33,12 @@ func (wg *WaitGroup) state() (statep *uint64, semap *uint32) {
 	}
 }
 
-// Add adds delta, which may be negative, to the WaitGroup counter.
-// If the counter becomes zero, all goroutines blocked on Wait are released.
-// If the counter goes negative, Add panics.
-//
-// Note that calls with a positive delta that occur when the counter is zero
-// must happen before a Wait. Calls with a negative delta, or calls with a
-// positive delta that start when the counter is greater than zero, may happen
-// at any time.
-// Typically this means the calls to Add should execute before the statement
-// creating the goroutine or other event to be waited for.
-// If a WaitGroup is reused to wait for several independent sets of events,
-// new Add calls must happen after all previous Wait calls have returned.
-// See the WaitGroup example.
+// Add 将增量delta（可能为负数）添加到 WaitGroup 计数器。
+// 如果计数器变为零，则释放所有在 Wait 上阻塞的 goroutine。如果计数器变为负数，则 Add panic。
+// 当计数器为零时，delta 为正的 Add 调用必须在 Wait 之前发生。
+// 当计数器大于零开始，负的 delta Add 调用可能随时发生。
+// 对 Add 的调用应在创建要等待的 goroutine 或其他事件的语句之前执行。
+// 如果重用 WaitGroup 来等待多个独立的事件集，则必须在返回所有以前的 Wait 调用后进行新的 Add 调用。
 func (wg *WaitGroup) Add(delta int) {
 	statep, semap := wg.state()
 	if race.Enabled {
