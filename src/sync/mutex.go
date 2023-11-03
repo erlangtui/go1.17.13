@@ -112,7 +112,7 @@ func (m *Mutex) lockSlow() {
 				// 如果没有等待则记录开始等待时刻
 				waitStartTime = runtime_nanotime()
 			}
-			// 通过信号量保证锁只能被 1 个 goroutine 获取到
+			// 通过信号量保证锁只能被 1 个 goroutine 获取到，阻塞等待被唤醒
 			runtime_SemacquireMutex(&m.sema, queueLifo, 1)
 			// 如果等待时间超过了阈值，那么就进入饥饿模式
 			starving = starving || runtime_nanotime()-waitStartTime > starvationThresholdNs
@@ -181,7 +181,7 @@ func (m *Mutex) unlockSlow(new int32) {
 			// 如果互斥锁存在等待者，会通过 sync.runtime_Semrelease 唤醒等待者并移交锁的所有权；
 			new = (old - 1<<mutexWaiterShift) | mutexWoken
 			if atomic.CompareAndSwapInt32(&m.state, old, new) {
-				runtime_Semrelease(&m.sema, false, 1)
+				runtime_Semrelease(&m.sema, false, 1) // 唤醒等待者
 				return
 			}
 			old = m.state
@@ -191,6 +191,6 @@ func (m *Mutex) unlockSlow(new int32) {
 		// 将互斥锁所有权移交给下一个等待者，并给出我们的时间片，以便下一个等待者可以立即开始运行。
 		// 等待者被唤醒后会得到锁，在这时互斥锁还不会退出饥饿状态，mutexLocked 未设置，等待者会在唤醒后设置。
 		// 如果设置了 mutexStarving，则 mutex 仍然被视为锁定，因此新的 goroutine 不会获取它。
-		runtime_Semrelease(&m.sema, true, 1)
+		runtime_Semrelease(&m.sema, true, 1)  // 唤醒等待者
 	}
 }
