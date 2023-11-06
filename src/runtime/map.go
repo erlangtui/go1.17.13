@@ -4,36 +4,20 @@
 
 package runtime
 
-// This file contains the implementation of Go's map type.
+// 此文件包含 Go 的 map 类型的实现。
+// map 只是一个哈希表。数据被排列到一个存储桶数组中。每个桶最多包含 8 个键值对。
+// 哈希值的低位用于选择存储桶。每个存储桶都包含每个哈希值的几个高阶位，以区分单个存储桶中的条目。
+// 如果一个存储桶的哈希值超过 8 个，我们会链接额外的存储桶。
+// 当哈希表扩容时，我们会分配一个两倍大的新存储桶数组。
+// 存储桶将以增量更新的方式从旧存储桶数组复制到新存储桶数组。
 //
-// A map is just a hash table. The data is arranged
-// into an array of buckets. Each bucket contains up to
-// 8 key/elem pairs. The low-order bits of the hash are
-// used to select a bucket. Each bucket contains a few
-// high-order bits of each hash to distinguish the entries
-// within a single bucket.
-//
-// If more than 8 keys hash to a bucket, we chain on
-// extra buckets.
-//
-// When the hashtable grows, we allocate a new array
-// of buckets twice as big. Buckets are incrementally
-// copied from the old bucket array to the new bucket array.
-//
-// Map iterators walk through the array of buckets and
-// return the keys in walk order (bucket #, then overflow
-// chain order, then bucket index).  To maintain iteration
-// semantics, we never move keys within their bucket (if
-// we did, keys might be returned 0 or 2 times).  When
-// growing the table, iterators remain iterating through the
-// old table and must check the new table if the bucket
-// they are iterating through has been moved ("evacuated")
-// to the new table.
-//
-// Picking loadFactor: too large and we have lots of overflow
-// buckets, too small and we waste a lot of space. I wrote
-// a simple program to check some stats for different loads:
-// (64-bit, 8 byte keys and elems)
+// map 迭代器遍历存储桶数组，并按遍历顺序返回键（存储桶，然后是溢出链顺序，然后是存储桶索引）。
+// 为了维护迭代语义，我们从不在其存储桶中移动 key（如果这样做，key可能会返回 0 或 2 次）。
+// 在哈希表扩容时，迭代器会继续遍历旧表，并且必须检查它们正在遍历的存储桶是否已移动（“撤出”）到新表。
+
+// 拣选 loadFactor：
+// 太大，我们有很多溢流桶，太小，我们浪费了很多空间。
+// 以下是不同负载的一些统计数据：
 //  loadFactor    %overflow  bytes/entry     hitprobe    missprobe
 //        4.00         2.13        20.77         3.00         4.00
 //        4.50         4.05        17.30         3.25         4.50
@@ -45,14 +29,13 @@ package runtime
 //        7.50        34.03         9.73         4.75         7.50
 //        8.00        41.10         9.40         5.00         8.00
 //
-// %overflow   = percentage of buckets which have an overflow bucket
+// %overflow   = 具有溢出存储桶的存储桶百分比
 // bytes/entry = overhead bytes used per key/elem pair
 // hitprobe    = # of entries to check when looking up a present key
 // missprobe   = # of entries to check when looking up an absent key
 //
 // Keep in mind this data is for maximally loaded tables, i.e. just
 // before the table grows. Typical tables will be somewhat less loaded.
-
 import (
 	"runtime/internal/atomic"
 	"runtime/internal/math"
