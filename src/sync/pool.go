@@ -11,9 +11,8 @@ import (
 	"unsafe"
 )
 
-// 池是一组可以单独保存和检索的临时对象
+// Pool 池是一组可以单独保存和检索的临时对象
 // 存储在池中的任何项目都可能随时自动删除，恕不另行通知。发生这种情况时如果池保存唯一的引用，则可能会解除分配该项目。
-//
 // 池是多线程安全的
 // 池的目的是缓存已分配但未使用的项目以供以后重用，从而减轻垃圾回收器的压力。
 // 它可以轻松构建高效、线程安全的空闲列表。但是，它并不适合所有免费列表。
@@ -29,7 +28,7 @@ type Pool struct {
 	noCopy noCopy
 
 	// 固定大小的每 P 池，实际类型为 [P]poolLocal 切片的指针，多个 goroutine 使用同一个 Pool 时，减少了竞争，提升了性能。
-	local     unsafe.Pointer
+	local unsafe.Pointer
 	// 本地队列 [P]poolLocal 的大小
 	localSize uintptr
 
