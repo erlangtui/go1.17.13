@@ -124,16 +124,6 @@ func delete(m map[Type]Type1, key Type)
 // 对于某些参数（如字符串文本或简单数组表达式），结果可以是常量。有关详细信息，请参阅 Go 语言规范的“长度和容量”部分。
 func len(v Type) int
 
-// The cap built-in function returns the capacity of v, according to its type:
-//	Array: the number of elements in v (same as len(v)).
-//	Pointer to array: the number of elements in *v (same as len(v)).
-//	Slice: the maximum length the slice can reach when resliced;
-//	if v is nil, cap(v) is zero.
-//	Channel: the channel buffer capacity, in units of elements;
-//	if v is nil, cap(v) is zero.
-// For some arguments, such as a simple array expression, the result can be a
-// constant. See the Go language specification's "Length and capacity" section for
-// details.
 // cap 内置函数根据其类型返回 v 的容量：
 // Array：v 中的元素数量（与 len（v） 相同）。
 // 数组指针：v 中的元素数（与 len（v） 相同）。
@@ -141,90 +131,57 @@ func len(v Type) int
 // 通道：通道缓冲容量，单位为元素;如果 v 为 nil，则 cap（v） 为零。
 func cap(v Type) int
 
-// The make built-in function allocates and initializes an object of type
-// slice, map, or chan (only). Like new, the first argument is a type, not a
-// value. Unlike new, make's return type is the same as the type of its
-// argument, not a pointer to it. The specification of the result depends on
-// the type:
-//	Slice: The size specifies the length. The capacity of the slice is
-//	equal to its length. A second integer argument may be provided to
-//	specify a different capacity; it must be no smaller than the
-//	length. For example, make([]int, 0, 10) allocates an underlying array
-//	of size 10 and returns a slice of length 0 and capacity 10 that is
-//	backed by this underlying array.
-//	Map: An empty map is allocated with enough space to hold the
-//	specified number of elements. The size may be omitted, in which case
-//	a small starting size is allocated.
-//	Channel: The channel's buffer is initialized with the specified
-//	buffer capacity. If zero, or the size is omitted, the channel is
-//	unbuffered.
+//
+// make 内置函数分配并初始化 slice、map 或 chan 类型的对象（仅）。
+// 与 new 一样，第一个参数是类型，而不是值。与 new 不同，make 的返回类型与其参数的类型相同，而不是指向它的指针。
+// 结果的规范取决于类型：
+// 切片：大小指定长度。切片的容量等于其长度。可以提供第二个整数参数来指定不同的容量;它必须不小于长度。
+// 例如，make（[]int， 0， 10） 分配一个大小为 10 的基础数组，并返回由此基础数组支持的长度为 0 和容量为 10 的切片。
+// 地图：为空地图分配足够的空间来容纳指定数量的元素。可以省略大小，在这种情况下，将分配较小的起始大小。
+// 通道：通道的缓冲区使用指定的缓冲区容量进行初始化。如果为零或省略大小，则通道无缓冲。
 func make(t Type, size ...IntegerType) Type
 
-// The new built-in function allocates memory. The first argument is a type,
-// not a value, and the value returned is a pointer to a newly
-// allocated zero value of that type.
+// new 内置函数分配内存。第一个参数是类型，而不是值，返回的值是指向该类型新分配的零值的指针。
 func new(Type) *Type
 
-// The complex built-in function constructs a complex value from two
-// floating-point values. The real and imaginary parts must be of the same
-// size, either float32 or float64 (or assignable to them), and the return
-// value will be the corresponding complex type (complex64 for float32,
-// complex128 for float64).
+// complex 内置函数从两个浮点值构造一个复数值。
+// 实部和虚部必须具有相同的大小，即 float32 或 float64 ，
+// 并且返回值将是相应的复数类型（float32 为 complex64，float64 为 complex128）。
 func complex(r, i FloatType) ComplexType
 
-// The real built-in function returns the real part of the complex number c.
-// The return value will be floating point type corresponding to the type of c.
+// real 内置函数返回复数 c 的实数部分。返回值将是与 c 类型对应的浮点类型。
 func real(c ComplexType) FloatType
 
-// The imag built-in function returns the imaginary part of the complex
-// number c. The return value will be floating point type corresponding to
-// the type of c.
+// imag 内置函数返回复数 c 的虚部。返回值将是与 c 类型对应的浮点类型。
 func imag(c ComplexType) FloatType
 
-// The close built-in function closes a channel, which must be either
-// bidirectional or send-only. It should be executed only by the sender,
-// never the receiver, and has the effect of shutting down the channel after
-// the last sent value is received. After the last value has been received
-// from a closed channel c, any receive from c will succeed without
-// blocking, returning the zero value for the channel element. The form
-//	x, ok := <-c
-// will also set ok to false for a closed channel.
+// close 内置函数关闭通道，该通道必须是双向的或仅发送的。
+// 通道应该只由发送方执行，而不是由接收方执行，并且具有在接收到最后一个发送的值后关闭通道的效果。
+// 从关闭后的通道 c 接收到最后一个值后，c 的任何接收 goroutine 都将成功接收到通道元素的零值，而不会被阻塞。
+// 对于关闭后的通道，x, ok := <-c 会将 ok 设置为 false。
 func close(c chan<- Type)
 
-// The panic built-in function stops normal execution of the current
-// goroutine. When a function F calls panic, normal execution of F stops
-// immediately. Any functions whose execution was deferred by F are run in
-// the usual way, and then F returns to its caller. To the caller G, the
-// invocation of F then behaves like a call to panic, terminating G's
-// execution and running any deferred functions. This continues until all
-// functions in the executing goroutine have stopped, in reverse order. At
-// that point, the program is terminated with a non-zero exit code. This
-// termination sequence is called panicking and can be controlled by the
-// built-in function recover.
+// panic 内置函数停止当前 goroutine 的正常执行。当函数 F 调用 panic 时，F 的正常执行会立即停止。
+// 任何被 F 延迟执行的函数都以平常的方式运行，然后 F 返回给其调用方。
+// 对于调用方 G，对 F 的调用就像对 panic 的调用一样，终止 G 的执行并运行任何延迟的函数。
+// 这种情况一直持续到执行 goroutine 中的所有函数以相反的顺序停止为止。此时，程序将终止，并带有非零退出代码。
+// 此终止序列称为 panicking，可通过内置函数 recover 进行控制。
 func panic(v interface{})
 
-// The recover built-in function allows a program to manage behavior of a
-// panicking goroutine. Executing a call to recover inside a deferred
-// function (but not any function called by it) stops the panicking sequence
-// by restoring normal execution and retrieves the error value passed to the
-// call of panic. If recover is called outside the deferred function it will
-// not stop a panicking sequence. In this case, or when the goroutine is not
-// panicking, or if the argument supplied to panic was nil, recover returns
-// nil. Thus the return value from recover reports whether the goroutine is
-// panicking.
+// recover 内置函数允许程序管理 goroutine 的 panic 行为，且只能捕获当前 goroutine。
+// 在延迟函数（但不是它调用的任何函数）中执行恢复调用会通过恢复正常执行来停止 panic 序列，并检索传递给 panic 调用的错误值。
+// 如果在延迟函数之外调用 recover，则不会停止 panic 序列。
+// 当 goroutine 没有 panic ，或者 panic 的参数为 nil，则 recover 返回 nil。
+// recover 的返回值能够说明 goroutine 是否处于 panic 状态。
 func recover() interface{}
 
-// The print built-in function formats its arguments in an
-// implementation-specific way and writes the result to standard error.
-// Print is useful for bootstrapping and debugging; it is not guaranteed
-// to stay in the language.
+// print 内置函数以特定地实现方式格式化其参数，并将结果写入标准错误。
+// 打印对于引导和调试很有用，它不能保证保留在语言中。
 func print(args ...Type)
 
-// The println built-in function formats its arguments in an
-// implementation-specific way and writes the result to standard error.
-// Spaces are always added between arguments and a newline is appended.
-// Println is useful for bootstrapping and debugging; it is not guaranteed
-// to stay in the language.
+// println 内置函数以特定地实现方式格式化其参数，并将结果写入标准错误。
+// 始终在参数之间添加空格，并附加换行符。
+// Println 对于引导和调试很有用，它不能保证保留在语言中。
 func println(args ...Type)
 
 // The error built-in interface type is the conventional interface for
