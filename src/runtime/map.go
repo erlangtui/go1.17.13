@@ -14,9 +14,7 @@ package runtime
 // map 迭代器遍历存储桶数组，并按遍历顺序返回键（存储桶，然后是溢出链顺序，然后是存储桶索引）。
 // 为了维护迭代语义，我们从不在其存储桶中移动 key（如果这样做，key可能会返回 0 或 2 次）。
 // 在哈希表扩容时，迭代器会继续遍历旧表，并且必须检查它们正在遍历的存储桶是否已移动（“撤出”）到新表。
-
-// 拣选 loadFactor：
-// 太大，我们有很多溢流桶，太小，我们浪费了很多空间。
+// 选择 loadFactor：太大，有很多溢流桶，太小，浪费了很多空间。
 // 以下是不同负载的一些统计数据：
 //  loadFactor    %overflow  bytes/entry     hitprobe    missprobe
 //        4.00         2.13        20.77         3.00         4.00
@@ -30,12 +28,10 @@ package runtime
 //        8.00        41.10         9.40         5.00         8.00
 //
 // %overflow   = 具有溢出存储桶的存储桶百分比
-// bytes/entry = overhead bytes used per key/elem pair
-// hitprobe    = # of entries to check when looking up a present key
-// missprobe   = # of entries to check when looking up an absent key
-//
-// Keep in mind this data is for maximally loaded tables, i.e. just
-// before the table grows. Typical tables will be somewhat less loaded.
+// bytes/entry = 每个键值对使用的开销字节数
+// hitprobe    = 查找当前 key 需要检查的条目数
+// missprobe   = 查找缺失 key 需要检查的条目数
+// 此数据适用于最大负载的表，即在表扩容之前。典型的表的负载会稍少一些。
 import (
 	"runtime/internal/atomic"
 	"runtime/internal/math"
@@ -93,7 +89,7 @@ func isEmpty(x uint8) bool {
 	return x <= emptyOne
 }
 
-// Go map 的头部，格式也在 cmdcompileinternalreflectdatareflect.go 中编码。确保这与编译器的定义保持同步。
+// Go map 的头部，格式也在 cmd/compile/internal/reflect/data/reflect.go 中编码。确保这与编译器的定义保持同步。
 type hmap struct {
 	count      int            // map 元素个数，必须在第一位，由内置函数 len() 调用
 	flags      uint8          // 标志

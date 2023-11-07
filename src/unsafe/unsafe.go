@@ -3,10 +3,7 @@
 // license that can be found in the LICENSE file.
 
 /*
-	Package unsafe contains operations that step around the type safety of Go programs.
-
-	Packages that import unsafe may be non-portable and are not protected by the
-	Go 1 compatibility guidelines.
+	unsafe包含绕过 Go 程序类型安全的操作。导入 unsafe 软件包可能是不可移植的，并且不受 Go 1 兼容性指南的保护。
 */
 package unsafe
 
@@ -183,18 +180,11 @@ type IntegerType int
 //
 type Pointer *ArbitraryType
 
-// Sizeof takes an expression x of any type and returns the size in bytes
-// of a hypothetical variable v as if v was declared via var v = x.
-// The size does not include any memory possibly referenced by x.
-// For instance, if x is a slice, Sizeof returns the size of the slice
-// descriptor, not the size of the memory referenced by the slice.
-// The return value of Sizeof is a Go constant.
+// Sizeof 返回任何类型  x 的字节大小 v，该大小不包括 x 可能引用的任何内存。
+// 例如，如果 x 是切片，则 Sizeof 返回切片描述符的大小，而不是切片引用的内存大小。
+// Sizeof 的返回值是 Go 常量。
 func Sizeof(x ArbitraryType) uintptr
 
-// Offsetof returns the offset within the struct of the field represented by x,
-// which must be of the form structValue.field. In other words, it returns the
-// number of bytes between the start of the struct and the start of the field.
-// The return value of Offsetof is a Go constant.
 // Offsetof 返回由 x 表示的字段结构内的偏移量，该字段的格式必须是 structValue.field。
 // 换句话说，它返回结构开头和字段开头之间的字节数。偏移量的返回值是一个 Go 常量。
 func Offsetof(x ArbitraryType) uintptr

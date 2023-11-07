@@ -9,19 +9,12 @@ import (
 	"unsafe"
 )
 
-// Cond implements a condition variable, a rendezvous point
-// for goroutines waiting for or announcing the occurrence
-// of an event.
-//
-// Each Cond has an associated Locker L (often a *Mutex or *RWMutex),
-// which must be held when changing the condition and
-// when calling the Wait method.
-//
-// A Cond must not be copied after first use.
+// Cond 实现了一个条件变量，它是等待或宣布事件发生的 goroutine 的集合点。
+// 每个 Cond 都有一个关联的 Locker L（通常是 Mutex 或 RWMutex），在更改条件和调用 Wait 方法时必须保留该 Locker L。首次使用后不得复制 Cond。
 type Cond struct {
 	noCopy noCopy
 
-	// L is held while observing or changing the condition
+	// L 在观察或改变条件时保持
 	L Locker
 
 	notify  notifyList
@@ -75,7 +68,7 @@ func (c *Cond) Broadcast() {
 	runtime_notifyListNotifyAll(&c.notify)
 }
 
-// copyChecker holds back pointer to itself to detect object copying.
+// copyChecker 将指针保留到自身以检测对象复制。
 type copyChecker uintptr
 
 func (c *copyChecker) check() {
@@ -87,8 +80,7 @@ func (c *copyChecker) check() {
 }
 
 
-// See https://golang.org/issues/8005#issuecomment-190753527 for details.
-// noCopy 可以嵌入到结构中，首次使用后不得复制
+// noCopy 可以嵌入到结构中，首次使用后不得复制，详见 https://golang.org/issues/8005#issuecomment-190753527
 type noCopy struct{}
 
 // Lock 是 'go vet' 的 -copylocks 检查器使用的 no-op。
