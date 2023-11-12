@@ -8,32 +8,24 @@ import (
 	"unsafe"
 )
 
-// A Value provides an atomic load and store of a consistently typed value.
-// The zero value for a Value returns nil from Load.
-// Once Store has been called, a Value must not be copied.
-//
-// A Value must not be copied after first use.
-// Value 提供一致类型化值的原子加载和存储。Value 的零值从加载返回 nil。
+// Value 提供一致类型化值的原子加载和存储。Value 的零值从 Load 返回 nil。
 // 调用 Store 后，Value 不得被复制。首次使用后 Value 不得被复制。
 type Value struct {
 	v interface{}
 }
 
-// ifaceWords is interface{} internal representation.
 // 接口的内部表达式
 type ifaceWords struct {
-	typ  unsafe.Pointer
-	data unsafe.Pointer
+	typ  unsafe.Pointer // 存储值的类型
+	data unsafe.Pointer // 存储具体的值
 }
 
-// Load returns the value set by the most recent Store.
-// It returns nil if there has been no call to Store for this Value.
-// Load 返回由最新存储设置的值。如果没有为此值调用 Store，则返回 nil。
+// Load 返回由 Store 最新设置的值。如果没有为此值调用 Store，则返回 nil。
 func (v *Value) Load() (val interface{}) {
 	vp := (*ifaceWords)(unsafe.Pointer(v))
 	typ := LoadPointer(&vp.typ)
 	if typ == nil || uintptr(typ) == ^uintptr(0) {
-		// First store not yet completed.
+		// 首次存储还没有完成
 		return nil
 	}
 	data := LoadPointer(&vp.data)
@@ -43,13 +35,11 @@ func (v *Value) Load() (val interface{}) {
 	return
 }
 
-// Store sets the value of the Value to x.
-// All calls to Store for a given Value must use values of the same concrete type.
-// Store of an inconsistent type panics, as does Store(nil).
-// 存储将值的值设置为 x。对给定值的 Store 的所有调用都必须使用相同的具体类型的值。
-// 存储不一致的类型会 panic，Store（nil） 也是如此。
+// Store 将 Value 的值设置为 x。对给定 Value 的 Store 的所有调用都必须使用相同的具体类型的值。
+// Store 不一致的类型会 panic，Store（nil） 也是如此。
 func (v *Value) Store(val interface{}) {
 	if val == nil {
+		// 存储的值为 nil 直接p anic
 		panic("sync/atomic: store of nil value into Value")
 	}
 	vp := (*ifaceWords)(unsafe.Pointer(v))
@@ -61,12 +51,14 @@ func (v *Value) Store(val interface{}) {
 			// Disable preemption so that other goroutines can use
 			// active spin wait to wait for completion; and so that
 			// GC does not see the fake type accidentally.
+			// 尝试启动第一次存储
+			// 禁止抢占以便其他 goroutine 能够使用主动自旋等待来等待完成，这样 GC 就不会意外地看到假类型。
 			runtime_procPin()
 			if !CompareAndSwapPointer(&vp.typ, nil, unsafe.Pointer(^uintptr(0))) {
 				runtime_procUnpin()
 				continue
 			}
-			// Complete first store.
+			// 第一次存储已经完成
 			StorePointer(&vp.data, vlp.data)
 			StorePointer(&vp.typ, vlp.typ)
 			runtime_procUnpin()
@@ -79,7 +71,9 @@ func (v *Value) Store(val interface{}) {
 			continue
 		}
 		// First store completed. Check type and overwrite data.
+		// 首次存储已经完成，校验类型并重写数据
 		if typ != vlp.typ {
+			// 类型不一致，直接 panic
 			panic("sync/atomic: store of inconsistently typed value into Value")
 		}
 		StorePointer(&vp.data, vlp.data)
@@ -194,6 +188,11 @@ func (v *Value) CompareAndSwap(old, new interface{}) (swapped bool) {
 	}
 }
 
-// Disable/enable preemption, implemented in runtime.
+// 禁止与允许强张， 在 runtime 中实现
+// runtime_procPin 函数用于将当前的 goroutine 与所在的操作系统线程进行绑定，这意味着 goroutine 将会始终在该操作系统线程上执行
+// 这种绑定关系在某些需要固定线程执行环境的场景中非常有用，比如需要与特定的操作系统资源绑定、避免线程切换开销等
 func runtime_procPin()
+
+// runtime_procUnpin 函数用于解除当前 goroutine 与操作系统线程的绑定，这样 goroutine 就可以自由地在不同的操作系统线程上执行
+// 这通常用于需要动态调度 goroutine 到不同线程上执行的场景，以充分利用多核处理器和实现更好的并发性能
 func runtime_procUnpin()

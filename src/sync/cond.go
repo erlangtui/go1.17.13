@@ -42,7 +42,7 @@ func NewCond(l Locker) *Cond {
 //
 func (c *Cond) Wait() {
 	c.checker.check()
-	t := runtime_notifyListAdd(&c.notify)
+	t := runtime_notifyListAdd(&c.notify) // 将当前的goroutine添加到条件变量的通知列表中
 	c.L.Unlock()
 	runtime_notifyListWait(&c.notify, t)
 	c.L.Lock()
@@ -70,7 +70,6 @@ func (c *copyChecker) check() {
 		panic("sync.Cond is copied")
 	}
 }
-
 
 // noCopy 可以嵌入到结构中，首次使用后不得复制，详见 https://golang.org/issues/8005#issuecomment-190753527
 type noCopy struct{}
