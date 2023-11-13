@@ -56,7 +56,7 @@ func (wg *WaitGroup) Add(delta int) {
 	// statep 高位存储的是 counter，将 delta 左移 32 位，加到 statep 的高位上
 	state := atomic.AddUint64(statep, uint64(delta)<<32)
 	v := int32(state >> 32) // 右移 32 位 得到实际的 counter 值
-	w := uint32(state) // 直接用 32 位截断，得到低位存储的 waiter
+	w := uint32(state)      // 直接用 32 位截断，得到低位存储的 waiter
 	if race.Enabled && delta > 0 && v == int32(delta) {
 		// The first increment must be synchronized with Wait.
 		// Need to model this as a read, because there can be
@@ -68,7 +68,7 @@ func (wg *WaitGroup) Add(delta int) {
 		panic("sync: negative WaitGroup counter")
 	}
 	if w != 0 && delta > 0 && v == int32(delta) {
-		// 已经调用了 Wait，但计数器为零，且 delta 为正，说明 Add 调用必须在 Wait 之后发生，panic
+		// 已经调用了 Wait，但计数器为零，且 delta 为正，说明 Add 调用在 Wait 之后发生，panic
 		panic("sync: WaitGroup misuse: Add called concurrently with Wait")
 	}
 	if v > 0 || w == 0 {
@@ -126,8 +126,9 @@ func (wg *WaitGroup) Wait() {
 			}
 			// 计数成功后，阻塞等待
 			runtime_Semacquire(semap)
+			// 阻塞等待完成，其他 goroutine 均已返回，wait 结束，此时 statep 应该为 0
 			if *statep != 0 {
-				// WaitGroup 被复用，且前一次的 wait 还没有返回，panic
+				// 如果 statep 不为 0，说明前一次的 wait 还没有返回时，WaitGroup 被复用，直接 panic
 				panic("sync: WaitGroup is reused before previous Wait has returned")
 			}
 			if race.Enabled {
