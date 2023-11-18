@@ -42,36 +42,32 @@ func (v *Value) Store(val interface{}) {
 		// 存储的值为 nil 直接p anic
 		panic("sync/atomic: store of nil value into Value")
 	}
+	// 通过类型转换将 v 和 val 转换为指向 ifaceWords 结构体的指针，以便能够直接访问 v 和 val 的底层数据
 	vp := (*ifaceWords)(unsafe.Pointer(v))
 	vlp := (*ifaceWords)(unsafe.Pointer(&val))
 	for {
+		// 循环的目的是确保原子操作成功，避免竞态条件
 		typ := LoadPointer(&vp.typ)
 		if typ == nil {
-			// Attempt to start first store.
-			// Disable preemption so that other goroutines can use
-			// active spin wait to wait for completion; and so that
-			// GC does not see the fake type accidentally.
 			// 尝试启动第一次存储
 			// 禁止抢占以便其他 goroutine 能够使用主动自旋等待来等待完成，这样 GC 就不会意外地看到假类型。
 			runtime_procPin()
 			if !CompareAndSwapPointer(&vp.typ, nil, unsafe.Pointer(^uintptr(0))) {
+				// 如果 vp 被其他 goroutine 初始化了，则继续 continue 等待
 				runtime_procUnpin()
 				continue
 			}
-			// 第一次存储已经完成
+			// 第一次存储已经完成，使用原子比较和交换（CompareAndSwapPointer）将 vp.typ 设置为 ^uintptr(0)，表示 vp 已经被初始化
 			StorePointer(&vp.data, vlp.data)
 			StorePointer(&vp.typ, vlp.typ)
 			runtime_procUnpin()
 			return
 		}
 		if uintptr(typ) == ^uintptr(0) {
-			// First store in progress. Wait.
-			// Since we disable preemption around the first store,
-			// we can wait with active spinning.
+			// 说明 vp 正在被其他 goroutine 初始化，此时暂时无法执行存储操作，需要继续循环等待
 			continue
 		}
-		// First store completed. Check type and overwrite data.
-		// 首次存储已经完成，校验类型并重写数据
+		// 对于非首次存储，校验类型并重写数据
 		if typ != vlp.typ {
 			// 类型不一致，直接 panic
 			panic("sync/atomic: store of inconsistently typed value into Value")
@@ -81,56 +77,46 @@ func (v *Value) Store(val interface{}) {
 	}
 }
 
-// Swap stores new into Value and returns the previous value. It returns nil if
-// the Value is empty.
-//
-// All calls to Swap for a given Value must use values of the same concrete
-// type. Swap of an inconsistent type panics, as does Swap(nil).
+// Swap 将 new 存储到 Value 中，并返回之前存储的值，如果 Value 为空，则返回 nil。
+// 对给定值的 Swap 的所有调用都必须使用相同具体类型的值，不一致类型的 Swap 会 panic，Swap（nil） 也会panic
 func (v *Value) Swap(new interface{}) (old interface{}) {
 	if new == nil {
 		panic("sync/atomic: swap of nil value into Value")
 	}
+	// 基本逻辑，同 Store
 	vp := (*ifaceWords)(unsafe.Pointer(v))
 	np := (*ifaceWords)(unsafe.Pointer(&new))
 	for {
 		typ := LoadPointer(&vp.typ)
 		if typ == nil {
-			// Attempt to start first store.
-			// Disable preemption so that other goroutines can use
-			// active spin wait to wait for completion; and so that
-			// GC does not see the fake type accidentally.
 			runtime_procPin()
 			if !CompareAndSwapPointer(&vp.typ, nil, unsafe.Pointer(^uintptr(0))) {
 				runtime_procUnpin()
 				continue
 			}
-			// Complete first store.
 			StorePointer(&vp.data, np.data)
 			StorePointer(&vp.typ, np.typ)
 			runtime_procUnpin()
-			return nil
+			return nil // 首次存储，说明当前 Value 为空，直接返回 nil
 		}
 		if uintptr(typ) == ^uintptr(0) {
-			// First store in progress. Wait.
-			// Since we disable preemption around the first store,
-			// we can wait with active spinning.
+			// 说明 vp 正在被其他 goroutine 初始化，此时暂时无法执行存储操作，需要继续循环等待
 			continue
 		}
-		// First store completed. Check type and overwrite data.
+		// 对于非首次存储，校验类型并重写数据
 		if typ != np.typ {
 			panic("sync/atomic: swap of inconsistently typed value into Value")
 		}
 		op := (*ifaceWords)(unsafe.Pointer(&old))
+		// 用新值指针替换旧值指针，并返回旧值指针
 		op.typ, op.data = np.typ, SwapPointer(&vp.data, np.data)
 		return old
 	}
 }
 
-// CompareAndSwap executes the compare-and-swap operation for the Value.
-//
-// All calls to CompareAndSwap for a given Value must use values of the same
-// concrete type. CompareAndSwap of an inconsistent type panics, as does
-// CompareAndSwap(old, nil).
+// CompareAndSwap 对 Value 执行比较和交换操作。
+// 对给定值的 CompareAndSwap 的所有调用都必须使用相同具体类型的值。
+// 不一致类型的 CompareAndSwap 和 CompareAndSwap（old， nil） 一样会 panic。
 func (v *Value) CompareAndSwap(old, new interface{}) (swapped bool) {
 	if new == nil {
 		panic("sync/atomic: compare and swap of nil value into Value")
@@ -139,56 +125,51 @@ func (v *Value) CompareAndSwap(old, new interface{}) (swapped bool) {
 	np := (*ifaceWords)(unsafe.Pointer(&new))
 	op := (*ifaceWords)(unsafe.Pointer(&old))
 	if op.typ != nil && np.typ != op.typ {
+		// 类型为空或不一致，panic
 		panic("sync/atomic: compare and swap of inconsistently typed values")
 	}
 	for {
+		// 原子加载当前值的类型
 		typ := LoadPointer(&vp.typ)
 		if typ == nil {
 			if old != nil {
+				// 值不相等，返回 false
 				return false
 			}
-			// Attempt to start first store.
-			// Disable preemption so that other goroutines can use
-			// active spin wait to wait for completion; and so that
-			// GC does not see the fake type accidentally.
+			// 值相等，且为空，则赋新值
 			runtime_procPin()
 			if !CompareAndSwapPointer(&vp.typ, nil, unsafe.Pointer(^uintptr(0))) {
 				runtime_procUnpin()
 				continue
 			}
-			// Complete first store.
+			// 旧值相等，且新值赋值成功，返回 true
 			StorePointer(&vp.data, np.data)
 			StorePointer(&vp.typ, np.typ)
 			runtime_procUnpin()
 			return true
 		}
 		if uintptr(typ) == ^uintptr(0) {
-			// First store in progress. Wait.
-			// Since we disable preemption around the first store,
-			// we can wait with active spinning.
+			// 说明 vp 正在被其他 goroutine 初始化，此时暂时无法执行存储操作，需要继续循环等待
 			continue
 		}
-		// First store completed. Check type and overwrite data.
+		// 当前值类型与新值类型不一致，panic
 		if typ != np.typ {
 			panic("sync/atomic: compare and swap of inconsistently typed value into Value")
 		}
-		// Compare old and current via runtime equality check.
-		// This allows value types to be compared, something
-		// not offered by the package functions.
-		// CompareAndSwapPointer below only ensures vp.data
-		// has not changed since LoadPointer.
+		// 原子加载获取当前值
 		data := LoadPointer(&vp.data)
 		var i interface{}
 		(*ifaceWords)(unsafe.Pointer(&i)).typ = typ
 		(*ifaceWords)(unsafe.Pointer(&i)).data = data
 		if i != old {
+			// 当前值不相等，直接返回 false
 			return false
 		}
+		// 原子对比并替换值指针
 		return CompareAndSwapPointer(&vp.data, data, np.data)
 	}
 }
 
-// 禁止与允许强张， 在 runtime 中实现
 // runtime_procPin 函数用于将当前的 goroutine 与所在的操作系统线程进行绑定，这意味着 goroutine 将会始终在该操作系统线程上执行
 // 这种绑定关系在某些需要固定线程执行环境的场景中非常有用，比如需要与特定的操作系统资源绑定、避免线程切换开销等
 func runtime_procPin()

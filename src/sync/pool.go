@@ -11,15 +11,13 @@ import (
 	"unsafe"
 )
 
-// Pool 池是一组可以单独保存和检索的临时对象
-// 存储在池中的任何项目都可能随时自动删除，恕不另行通知。发生这种情况时如果池保存唯一的引用，则可能会解除分配该项目。
-// 池是多线程安全的
-// 池的目的是缓存已分配但未使用的项目以供以后重用，从而减轻垃圾回收器的压力。
+// Pool 是一组可以单独保存和检索的临时对象的集合
+// 存储在池中的任何项目都可能随时自动删除，不另行通知。发生这种情况时如果池保存唯一的引用，则可能会解除分配该项目。
+// 池是多线程安全的，池的目的是缓存已分配但未使用的项目以供以后重用，从而减轻垃圾回收器的压力。
 // 它可以轻松构建高效、线程安全的空闲列表。但是，它并不适合所有免费列表。
 // 池的适当用法是管理一组临时项目，这些项目在包的并发独立客户端之间静默共享并可能由这些临时客户端重用。
 // 池提供了一种在多个客户端之间摊销分配开销的方法。
-// 很好地使用池的一个示例是 fmt 包，它维护一个动态大小的临时输出缓冲区存储。
-// 存储在负载下缩放（当许多 goroutines 主动打印时）并在静止时收缩。
+// 很好地使用池的一个示例是 fmt 包，它维护一个动态大小的临时输出缓冲区存储，当许多 goroutine 打印时缓冲区变大，静止时变小
 // 另一方面，作为短期对象的一部分维护的空闲列表不适合用于池，因为在这种情况下开销不能很好地摊销。
 // 让此类对象实现自己的自由列表会更有效。
 // 首次使用后不得复制池。
@@ -70,7 +68,7 @@ func poolRaceAddr(x interface{}) unsafe.Pointer {
 	return unsafe.Pointer(&poolRaceHash[h%uint32(len(poolRaceHash))])
 }
 
-// Put adds x to the pool.
+// Put 往池子中添加 x
 func (p *Pool) Put(x interface{}) {
 	if x == nil {
 		return
@@ -173,13 +171,16 @@ func (p *Pool) getSlow(pid int) interface{} {
 	return nil
 }
 
-// 将当前goroutine固定到P，禁用抢占并返回P的poolLocal pool和P的ID。调用方必须在处理完池后调用 runtime_procUnpin()
+// 将当前 goroutine 固定到 P，禁用抢占并返回 P 的 poolLocal 和 P 的 ID。调用方必须在处理完池后调用 runtime_procUnpin()
 func (p *Pool) pin() (*poolLocal, int) {
 	pid := runtime_procPin()
 	// In pinSlow we store to local and then to localSize, here we load in opposite order.
 	// Since we've disabled preemption, GC cannot happen in between.
 	// Thus here we must observe local at least as large localSize.
 	// We can observe a newer/larger local, it is fine (we must observe its zero-initialized-ness).
+	// 在 pinSlow 中，我们存储到 local，然后存储到 localSize，这里我们以相反的顺序加载。
+	// 由于我们禁用了抢占，因此 GC 不会在两者之间发生。因此，在这里我们必须观察到 local 至少和 localSize 一样大。
+	// 我们可以观察到一个较新的局部，这很好（我们必须观察它的零初始化性）。
 	s := runtime_LoadAcquintptr(&p.localSize) // load-acquire
 	l := p.local                              // load-consume
 	if uintptr(pid) < s {
