@@ -214,8 +214,7 @@ func (p *Pool) pinSlow() (*poolLocal, int) {
 }
 
 func poolCleanup() {
-	// This function is called with the world stopped, at the beginning of a garbage collection.
-	// It must not allocate and probably should not call any runtime functions.
+	// 在垃圾回收开始时，STW 的情况下调用此函数，它不能分配，也可能不应该调用任何运行时函数。
 
 	// Because the world is stopped, no pool user can be in a
 	// pinned section (in effect, this has all Ps pinned).

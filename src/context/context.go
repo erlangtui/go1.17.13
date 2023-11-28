@@ -57,7 +57,6 @@ import (
 
 // A Context carries a deadline, a cancellation signal, and other values across API boundaries.
 // Context's methods may be called by multiple goroutines simultaneously.
-// Context's methods may be called by multiple goroutines simultaneously.
 //  一个携带了截止时间、取消信息、以及其他值的跨API界限的上下文可以被多个线程同时调用
 type Context interface {
 	// Deadline returns the time when work done on behalf of this context
