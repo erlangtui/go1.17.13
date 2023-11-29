@@ -9,10 +9,9 @@ import (
 	"unsafe"
 )
 
-// GOMAXPROCS sets the maximum number of CPUs that can be executing
-// simultaneously and returns the previous setting. It defaults to
-// the value of runtime.NumCPU. If n < 1, it does not change the current setting.
-// This call will go away when the scheduler improves.
+// GOMAXPROCS 设置可以同时执行的最大 CPU 数，并返回先前的设置。
+// 它默认为 runtime.NumCPU。如果 n < 1，则不会更改当前设置。
+// 当调度程序改进时，此调用将消失。
 func GOMAXPROCS(n int) int {
 	if GOARCH == "wasm" && n > 1 {
 		n = 1 // WebAssembly has no threads yet, so only one CPU is possible.

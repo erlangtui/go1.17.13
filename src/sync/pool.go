@@ -26,13 +26,15 @@ type Pool struct {
 	noCopy noCopy
 
 	// 固定大小的每 P 池，实际类型为 [P]poolLocal 切片的指针，多个 goroutine 使用同一个 Pool 时，减少了竞争，提升了性能。
+	// 指向 poolLocal 切片的第一个元素
 	local unsafe.Pointer
-	// 本地队列 [P]poolLocal 的大小
+	// 本地切片 poolLocal 的大小
 	localSize uintptr
 
-	// 在一轮 GC 到来时，victim 和 victimSize 会分别“接管” local 和 localSize。victim 的机制用于减少 GC 后冷启动导致的性能抖动，让分配对象更平滑。
-	victim     unsafe.Pointer // local from previous cycle
-	victimSize uintptr        // size of victims array
+	// 在一轮 GC 到来时，victim 和 victimSize 会分别“接管” local 和 localSize。
+	// victim 的机制用于减少 GC 后冷启动导致的性能抖动，让分配对象更平滑。
+	victim     unsafe.Pointer
+	victimSize uintptr
 
 	// 指定一个函数，用于在 Get 否则返回 nil 时生成值，不能与调用 Get 同时更改。
 	New func() interface{}
@@ -171,13 +173,10 @@ func (p *Pool) getSlow(pid int) interface{} {
 	return nil
 }
 
-// 将当前 goroutine 固定到 P，禁用抢占并返回 P 的 poolLocal 和 P 的 ID。调用方必须在处理完池后调用 runtime_procUnpin()
+// 将当前 goroutine 固定到 P，禁用抢占并返回 P 的 poolLocal 和 P 的 ID
+// 调用方必须在处理完池后调用 runtime_procUnpin()
 func (p *Pool) pin() (*poolLocal, int) {
 	pid := runtime_procPin()
-	// In pinSlow we store to local and then to localSize, here we load in opposite order.
-	// Since we've disabled preemption, GC cannot happen in between.
-	// Thus here we must observe local at least as large localSize.
-	// We can observe a newer/larger local, it is fine (we must observe its zero-initialized-ness).
 	// 在 pinSlow 中，我们存储到 local，然后存储到 localSize，这里我们以相反的顺序加载。
 	// 由于我们禁用了抢占，因此 GC 不会在两者之间发生。因此，在这里我们必须观察到 local 至少和 localSize 一样大。
 	// 我们可以观察到一个较新的局部，这很好（我们必须观察它的零初始化性）。
@@ -206,7 +205,7 @@ func (p *Pool) pinSlow() (*poolLocal, int) {
 		allPools = append(allPools, p)
 	}
 	// If GOMAXPROCS changes between GCs, we re-allocate the array and lose the old one.
-	size := runtime.GOMAXPROCS(0)
+	size := runtime.GOMAXPROCS(0) // 只获取先前设置的最大并发数，不实际改变其值
 	local := make([]poolLocal, size)
 	atomic.StorePointer(&p.local, unsafe.Pointer(&local[0])) // store-release
 	runtime_StoreReluintptr(&p.localSize, uintptr(size))     // store-release
@@ -241,13 +240,10 @@ func poolCleanup() {
 var (
 	allPoolsMu Mutex
 
-	// allPools is the set of pools that have non-empty primary
-	// caches. Protected by either 1) allPoolsMu and pinning or 2)
-	// STW.
+	// allPools 是具有非空主缓存的一组池。受 1) allPoolsMu and pinning or 2) STW 保护
 	allPools []*Pool
 
-	// oldPools is the set of pools that may have non-empty victim
-	// caches. Protected by STW.
+	// oldPools 是具有非空 victim 缓存的一组池。受 STW 保护.
 	oldPools []*Pool
 )
 
@@ -262,6 +258,7 @@ func indexLocal(l unsafe.Pointer, i int) *poolLocal {
 
 // Implemented in runtime.
 func runtime_registerPoolCleanup(cleanup func())
+// 获取当前 goroutine 所绑定的处理器 P 的 ID
 func runtime_procPin() int
 func runtime_procUnpin()
 

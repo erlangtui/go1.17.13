@@ -6321,6 +6321,7 @@ func setMaxThreads(in int) (out int) {
 }
 
 //go:nosplit
+// 获取当前 goroutine 所绑定的处理器 P 的 ID
 func procPin() int {
 	_g_ := getg()
 	mp := _g_.m
