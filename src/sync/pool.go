@@ -18,39 +18,50 @@ import (
 // 池的适当用法是管理一组临时项目，这些项目在包的并发独立客户端之间静默共享并可能由这些临时客户端重用。
 // 池提供了一种在多个客户端之间摊销分配开销的方法。
 // 很好地使用池的一个示例是 fmt 包，它维护一个动态大小的临时输出缓冲区存储，当许多 goroutine 打印时缓冲区变大，静止时变小
-// 另一方面，作为短期对象的一部分维护的空闲列表不适合用于池，因为在这种情况下开销不能很好地摊销。
-// 让此类对象实现自己的自由列表会更有效。
+// 另一方面，作为短期对象的一部分维护的空闲列表不适合用于池，因为在这种情况下开销不能很好地摊销，让此类对象实现自己的自由列表会更有效。
 // 首次使用后不得复制池。
 type Pool struct {
 	// 不消耗内存仅用于静态分析的结构，保证一个对象在第一次使用后不会发生复制
 	noCopy noCopy
 
-	// 固定大小的每 P 池，实际类型为 [P]poolLocal 切片的指针，多个 goroutine 使用同一个 Pool 时，减少了竞争，提升了性能。
-	// 指向 poolLocal 切片的第一个元素
+	// 指向本地 poolLocal 切片的第一个元素，每个 P 对应一个 poolLocal，多个 goroutine 对同一个 Pool 操作时，每个运行在 P 上的 goroutine 优先取该 P 上 poolLocal 中的元素，能够减少不同 goroutine 之间的竞争，提升性能
 	local unsafe.Pointer
-	// 本地切片 poolLocal 的大小
+	// 本地切片 poolLocal 的大小，一般是系统核数，除非程序中自定义了运行核数
 	localSize uintptr
-
-	// 在一轮 GC 到来时，victim 和 victimSize 会分别“接管” local 和 localSize。
-	// victim 的机制用于减少 GC 后冷启动导致的性能抖动，让分配对象更平滑。
+	/*
+		Victim cache（牺牲者缓存）是一种用于提高缓存性能的缓存内存类型，临时存储从主缓存中驱逐出来的数据，它通常位于主缓存和主存储器之间。
+		当主缓存发生缓存未命中时，在访问主存储器之前会检查牺牲者缓存。如果请求的数据在牺牲者缓存中找到，就认为是缓存命中，并将数据返回给处理器，而无需访问主存储器。
+		作为一种优化缓存的技术，助于减少平均内存访问时间，提高整体系统性能。
+		当主缓存需要用新数据替换一个缓存行时，它会将最近最少使用（LRU）的缓存行放入牺牲者缓存中，以防近期再次需要该数据。
+		牺牲者缓存通常比主缓存更小，关联度更低。它的目的是捕获那些可能在不久的将来再次访问的缓存行，但由于主缓存的大小限制而无法容纳。
+		通过将这些被驱逐的缓存行保留在一个单独的缓存中，系统可以减少对主存储器的访问次数，提高整体性能。
+		在一轮 GC 到来时，victim 和 victimSize 会分别接管 local 和 localSize
+		当从 local 中未查询到时，会进一步在 victim 中查询；
+		在 GC 后冷启动时，local 中没有缓存对象，victim 中有，能够避免冷启时大量创建对象导致性能抖动，让分配对象更平滑
+	*/
 	victim     unsafe.Pointer
 	victimSize uintptr
 
-	// 指定一个函数，用于在 Get 否则返回 nil 时生成值，不能与调用 Get 同时更改。
+	// 指定一个函数，用于在 Pool 中没有对象时创建新的对象
 	New func() interface{}
 }
 
-// Local per-P Pool appendix.
+// 每一个 P 所拥有的私有对象和共享对象链表
 type poolLocalInternal struct {
-	private interface{} // 只能由相应的 P 使用。
-	shared  poolChain   // 本地的 P 能够 pushHead/popHead; 其他 P popTail.
+	private interface{} // 当前 P 私有的对象，只能由其所属的当前 P 存储和获取
+	shared  poolChain   // 当前 P 与其他 P 共有双向链表，链表中存储对象，当前 P 是生产者，能够 pushHead/popHead，其他 P 是消费者，只能 popTail.
 }
 
 type poolLocal struct {
 	poolLocalInternal
 
-	// 防止在广泛的平台上进行虚假共享，cpu line
-	// 128 mod (cache line size) = 0 .
+	/*
+	CPU 在访问数据是按照 64/128 字节作为一行一起加载的，如果某个变量不足一行，则会和其他变量同时加载进 CPU CacheLine，当一个变量失效时会导致该行其他变量也失效，这是一种伪共享现象，
+	第一、二层 CPU 缓存是每个 CPU 各自独有的，第三层 CPU 缓存是不同 CPU 之间共享的，CPU CacheLine 中有变量失效时，会导致整个 CPU CacheLine 都需要从主存中重新加载，对性能有影响，
+	如果没有 pad 字段，可能会导致一个 CPU CacheLine 中存在多个 poolLocal 对象，而这些对象又属于不同 CPU 上的 P，
+	当某个 CPU 上的 P 修改了 CPU CacheLine 上的该 P 对应的 poolLocal 时，会导致其他 poolLocal 失效，那么该 poolLocal 对应的 P 所在的 CPU 就需要重新加载，
+	所以，pad 的目的是让专属于某个 P 的 poolLocal 独占一整个 CPU CacheLine，避免使得其他 poolLocal 在 CPU CacheLine 中失效，毕竟该 P 是优先访问自己的 poolLocal
+	*/
 	pad [128 - unsafe.Sizeof(poolLocalInternal{})%128]byte
 }
 
@@ -83,28 +94,26 @@ func (p *Pool) Put(x interface{}) {
 		race.ReleaseMerge(poolRaceAddr(x))
 		race.Disable()
 	}
+	// 将当前 G 绑定到 P，并返回 P 的 poolLocal 和 id（CPU序号）
 	l, _ := p.pin()
 	if l.private == nil {
+		// 如果 P 的 poolLocal 的私有对象为空，则直接将 x 赋给它
 		l.private = x
 		x = nil
 	}
 	if x != nil {
+		// 说明 P 的 poolLocal 的私有对象不为空，则将 x push 到其附属的链表的头部，因为该 P 是其 poolLocal 的生产者
 		l.shared.pushHead(x)
 	}
-	runtime_procUnpin()
+	runtime_procUnpin() // 接触 G 与 P 的绑定
 	if race.Enabled {
 		race.Enable()
 	}
 }
 
-// Get selects an arbitrary item from the Pool, removes it from the
-// Pool, and returns it to the caller.
-// Get may choose to ignore the pool and treat it as empty.
-// Callers should not assume any relation between values passed to Put and
-// the values returned by Get.
-//
-// If Get would otherwise return nil and p.New is non-nil, Get returns
-// the result of calling p.New.
+// Get 从池中选择任意项，将其从池中删除，然后将其返回给调用方
+// Get 可以选择忽略池并将其视为空。调用方不应假定传递给 Put 的值与 Get 返回的值之间存在任何关系。
+// 如果 Get 将要返回 nil 并且 p.New 为非 nil，则 Get 将返回调用 p.New 的结果。
 func (p *Pool) Get() interface{} {
 	if race.Enabled {
 		race.Disable()
@@ -113,9 +122,9 @@ func (p *Pool) Get() interface{} {
 	x := l.private
 	l.private = nil
 	if x == nil {
-		// Try to pop the head of the local shard. We prefer
-		// the head over the tail for temporal locality of
-		// reuse.
+
+		// 尝试弹出本地分片的头部。对于重用的时间局部性，我们更喜欢头而不是尾。
+		// 时间局部性是指处理器在短时间内多次访问相同的内存位置或附近的内存位置的倾向
 		x, _ = l.shared.popHead()
 		if x == nil {
 			x = p.getSlow(pid)
@@ -258,6 +267,7 @@ func indexLocal(l unsafe.Pointer, i int) *poolLocal {
 
 // Implemented in runtime.
 func runtime_registerPoolCleanup(cleanup func())
+
 // 获取当前 goroutine 所绑定的处理器 P 的 ID
 func runtime_procPin() int
 func runtime_procUnpin()

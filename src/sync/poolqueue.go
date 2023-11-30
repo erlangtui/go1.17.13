@@ -167,6 +167,9 @@ type poolChain struct {
 	head *poolChainElt
 	// tail 是要从尾部弹出的 poolDequeue。它由消费者访问，因此读取和写入必须是原子的。tail 指向的是最早创建的队列，也就是最小的队列。
 	tail *poolChainElt
+
+	// P1 作为生产者从 P1 的头部开始读，其他 P 作为消费者，从 P1 的尾部开始读，他们与 P1 之间不会产生竞争，但是他们之间会有竞争
+	// 故头部读不用原子操作，尾部读需要用原子操作
 }
 
 // poolChainElt 中每个 poolDequeue 队列的长度都是 2 幂，并且是前一个队列的两倍
@@ -176,6 +179,7 @@ type poolChainElt struct {
 	// next、prev 链接到 poolChain 相邻的 poolChainElts
 	// next 指向的方向为 head，由生产者以原子方式编写，由消费者以原子方式读取。它只从 nil 过渡到非 nil。
 	// prev 指向的方向为 nil，由消费者以原子方式编写，由生产者以原子方式读取。它只从非 nil 过渡到 nil。
+	// 当前 P 上的 G 对于该 P 上的 poolDequeue 是生产者，从 next 上写和读，对于其他 P 上的 poolDequeue 是消费者，只能从 prev 读，不能写；
 	next, prev *poolChainElt
 }
 
@@ -223,7 +227,7 @@ func (c *poolChain) popHead() (interface{}, bool) {
 		if val, ok := d.popHead(); ok {
 			return val, ok
 		}
-		// 获取前一个队列，尝试从前面的队列中弹出
+		// 获取前一个队列，尝试从前面的队列中弹出，只有消费者读头部，不会有竞争
 		d = loadPoolChainElt(&d.prev)
 	}
 	return nil, false
@@ -249,6 +253,7 @@ func (c *poolChain) popTail() (interface{}, bool) {
 			return nil, false
 		}
 
+		// 不同 P 读同一个 P 的尾部时，会有竞争，故用原子操作
 		// 链条的尾部已弹空，尝试将 tail 指向当前队列的 next 队列，以从链表中删除当前队列，这样下一次弹出时就不必再次查看空队列
 		if atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&c.tail)), unsafe.Pointer(d), unsafe.Pointer(d2)) {
 			// CAS 成功，清除 prev 指针，当前队列的 next 队列的 pre 是指向当前队列的，此时需要置为 nil，以便垃圾回收期可以回收当前这个空队列

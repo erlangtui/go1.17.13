@@ -33,16 +33,13 @@ func GOMAXPROCS(n int) int {
 	return ret
 }
 
-// NumCPU returns the number of logical CPUs usable by the current process.
-//
-// The set of available CPUs is checked by querying the operating system
-// at process startup. Changes to operating system CPU allocation after
-// process startup are not reflected.
+// NumCPU 返回当前进程可用的逻辑 CPU 数。通过在进程启动时查询操作系统来检查可用 CPU 集。
+// 进程启动后对操作系统 CPU 分配的更改不会反映出来。
 func NumCPU() int {
 	return int(ncpu)
 }
 
-// NumCgoCall returns the number of cgo calls made by the current process.
+// NumCgoCall 返回当前进程发出的 CGO 调用数。
 func NumCgoCall() int64 {
 	var n = int64(atomic.Load64(&ncgocall))
 	for mp := (*m)(atomic.Loadp(unsafe.Pointer(&allm))); mp != nil; mp = mp.alllink {
@@ -51,7 +48,7 @@ func NumCgoCall() int64 {
 	return n
 }
 
-// NumGoroutine returns the number of goroutines that currently exist.
+// NumGoroutine 返回当前存在的 goroutines 数。
 func NumGoroutine() int {
 	return int(gcount())
 }
