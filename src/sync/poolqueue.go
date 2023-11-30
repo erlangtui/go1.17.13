@@ -172,7 +172,7 @@ type poolChain struct {
 	// 故头部读不用原子操作，尾部读需要用原子操作
 }
 
-// poolChainElt 中每个 poolDequeue 队列的长度都是 2 幂，并且是前一个队列的两倍
+// poolChainElt 是一个双向链表，只是链表的每个元素都是一个环形队列 poolDequeue，每个 poolDequeue 队列的长度都是 2 幂，并且是前一个队列长度的两倍
 type poolChainElt struct {
 	poolDequeue
 
@@ -232,6 +232,7 @@ func (c *poolChain) popHead() (interface{}, bool) {
 	}
 	return nil, false
 }
+
 // tail 侧的空队列会被删除
 func (c *poolChain) popTail() (interface{}, bool) {
 	d := loadPoolChainElt(&c.tail)
