@@ -56,11 +56,11 @@ type poolLocal struct {
 	poolLocalInternal
 
 	/*
-	CPU 在访问数据是按照 64/128 字节作为一行一起加载的，如果某个变量不足一行，则会和其他变量同时加载进 CPU CacheLine，当一个变量失效时会导致该行其他变量也失效，这是一种伪共享现象，
-	第一、二层 CPU 缓存是每个 CPU 各自独有的，第三层 CPU 缓存是不同 CPU 之间共享的，CPU CacheLine 中有变量失效时，会导致整个 CPU CacheLine 都需要从主存中重新加载，对性能有影响，
-	如果没有 pad 字段，可能会导致一个 CPU CacheLine 中存在多个 poolLocal 对象，而这些对象又属于不同 CPU 上的 P，
-	当某个 CPU 上的 P 修改了 CPU CacheLine 上的该 P 对应的 poolLocal 时，会导致其他 poolLocal 失效，那么该 poolLocal 对应的 P 所在的 CPU 就需要重新加载，
-	所以，pad 的目的是让专属于某个 P 的 poolLocal 独占一整个 CPU CacheLine，避免使得其他 poolLocal 在 CPU CacheLine 中失效，毕竟该 P 是优先访问自己的 poolLocal
+		CPU 在访问数据是按照 64/128 字节作为一行一起加载的，如果某个变量不足一行，则会和其他变量同时加载进 CPU CacheLine，当一个变量失效时会导致该行其他变量也失效，这是一种伪共享现象，
+		第一、二层 CPU 缓存是每个 CPU 各自独有的，第三层 CPU 缓存是不同 CPU 之间共享的，CPU CacheLine 中有变量失效时，会导致整个 CPU CacheLine 都需要从主存中重新加载，对性能有影响，
+		如果没有 pad 字段，可能会导致一个 CPU CacheLine 中存在多个 poolLocal 对象，而这些对象又属于不同 CPU 上的 P，
+		当某个 CPU 上的 P 修改了 CPU CacheLine 上的该 P 对应的 poolLocal 时，会导致其他 poolLocal 失效，那么该 poolLocal 对应的 P 所在的 CPU 就需要重新加载，
+		所以，pad 的目的是让专属于某个 P 的 poolLocal 独占一整个 CPU CacheLine，避免使得其他 poolLocal 在 CPU CacheLine 中失效，毕竟该 P 是优先访问自己的 poolLocal
 	*/
 	pad [128 - unsafe.Sizeof(poolLocalInternal{})%128]byte
 }
@@ -105,7 +105,7 @@ func (p *Pool) Put(x interface{}) {
 		// 说明 P 的 poolLocal 的私有对象不为空，则将 x push 到其附属的链表的头部，因为该 P 是其 poolLocal 的生产者
 		l.shared.pushHead(x)
 	}
-	runtime_procUnpin() // 接触 G 与 P 的绑定
+	runtime_procUnpin() // 解除 G 与 P 的绑定
 	if race.Enabled {
 		race.Enable()
 	}
@@ -118,19 +118,21 @@ func (p *Pool) Get() interface{} {
 	if race.Enabled {
 		race.Disable()
 	}
+	// 将当前 G 绑定到 P，并返回 P 的 poolLocal 和 id（CPU序号）
 	l, pid := p.pin()
 	x := l.private
 	l.private = nil
 	if x == nil {
-
-		// 尝试弹出本地分片的头部。对于重用的时间局部性，我们更喜欢头而不是尾。
+		// P 的 poolLocal 的私有对象为空，尝试从共享队列中的头部弹出对象
+		// 对于重用的时间局部性，我们更喜欢头而不是尾。
 		// 时间局部性是指处理器在短时间内多次访问相同的内存位置或附近的内存位置的倾向
 		x, _ = l.shared.popHead()
 		if x == nil {
+			// P 的共享队列为空，尝试从其他 P 的共享队列和受害者缓存中弹出
 			x = p.getSlow(pid)
 		}
 	}
-	runtime_procUnpin()
+	runtime_procUnpin() // 解除 G 与 P 的绑定
 	if race.Enabled {
 		race.Enable()
 		if x != nil {
@@ -138,15 +140,17 @@ func (p *Pool) Get() interface{} {
 		}
 	}
 	if x == nil && p.New != nil {
+		// 如果弹出的对象为空，并且 New 函数不为空，则直接调用 New 函数创建一个新的对象
 		x = p.New()
 	}
 	return x
 }
 
+// 尝试从其他 P 的共享队列中获取对象，获取不到时，再尝试从 victim 中获取
 func (p *Pool) getSlow(pid int) interface{} {
 	// See the comment in pin regarding ordering of the loads.
-	size := runtime_LoadAcquintptr(&p.localSize) // load-acquire
-	locals := p.local                            // load-consume
+	size := runtime_LoadAcquintptr(&p.localSize)
+	locals := p.local
 	// Try to steal one element from other procs.
 	for i := 0; i < int(size); i++ {
 		l := indexLocal(locals, (pid+i+1)%int(size))
@@ -185,13 +189,14 @@ func (p *Pool) getSlow(pid int) interface{} {
 // 将当前 goroutine 固定到 P，禁用抢占并返回 P 的 poolLocal 和 P 的 ID
 // 调用方必须在处理完池后调用 runtime_procUnpin()
 func (p *Pool) pin() (*poolLocal, int) {
-	pid := runtime_procPin()
+	pid := runtime_procPin() // 将当前 goroutine 固定到 P
 	// 在 pinSlow 中，我们存储到 local，然后存储到 localSize，这里我们以相反的顺序加载。
 	// 由于我们禁用了抢占，因此 GC 不会在两者之间发生。因此，在这里我们必须观察到 local 至少和 localSize 一样大。
 	// 我们可以观察到一个较新的局部，这很好（我们必须观察它的零初始化性）。
-	s := runtime_LoadAcquintptr(&p.localSize) // load-acquire
-	l := p.local                              // load-consume
+	s := runtime_LoadAcquintptr(&p.localSize) // 可以保证读取到的值是其他 Goroutine 写入的最新值，确保并发情况下的内存一致性和可见性
+	l := p.local
 	if uintptr(pid) < s {
+		// P 的索引小于 local 数组的长度时，直接取索引处的 local 返回
 		return indexLocal(l, pid), pid
 	}
 	return p.pinSlow()
