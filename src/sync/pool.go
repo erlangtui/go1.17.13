@@ -81,7 +81,7 @@ func poolRaceAddr(x interface{}) unsafe.Pointer {
 	return unsafe.Pointer(&poolRaceHash[h%uint32(len(poolRaceHash))])
 }
 
-// Put 往池子中添加 x
+// Put 往池子中添加 x 对象
 func (p *Pool) Put(x interface{}) {
 	if x == nil {
 		return
@@ -111,7 +111,7 @@ func (p *Pool) Put(x interface{}) {
 	}
 }
 
-// Get 从池中选择任意项，将其从池中删除，然后将其返回给调用方
+// Get 从池中选择任意对象，并将其从池中删除，然后将其返回给调用方
 // Get 可以选择忽略池并将其视为空。调用方不应假定传递给 Put 的值与 Get 返回的值之间存在任何关系。
 // 如果 Get 将要返回 nil 并且 p.New 为非 nil，则 Get 将返回调用 p.New 的结果。
 func (p *Pool) Get() interface{} {
@@ -126,9 +126,9 @@ func (p *Pool) Get() interface{} {
 		// P 的 poolLocal 的私有对象为空，尝试从共享队列中的头部弹出对象
 		// 对于重用的时间局部性，我们更喜欢头而不是尾。
 		// 时间局部性是指处理器在短时间内多次访问相同的内存位置或附近的内存位置的倾向
-		x, _ = l.shared.popHead()
+		x, _ = l.shared.popHead() // 作为自己队列的生产者，可以从头部读
 		if x == nil {
-			// P 的共享队列为空，尝试从其他 P 的共享队列和受害者缓存中弹出
+			// P 的 poolLocal 的共享队列为空，尝试从其他 P 的 poolLocal 的共享队列和受害者缓存中弹出
 			x = p.getSlow(pid)
 		}
 	}
@@ -146,22 +146,25 @@ func (p *Pool) Get() interface{} {
 	return x
 }
 
-// 尝试从其他 P 的共享队列中获取对象，获取不到时，再尝试从 victim 中获取
+// 尝试从其他 P 的 poolLocal 的共享队列中获取对象，获取不到时，再尝试从 victim 中获取
 func (p *Pool) getSlow(pid int) interface{} {
-	// See the comment in pin regarding ordering of the loads.
+	// 以 runtime_LoadAcquintptr 的方式获取 p.localSize 的值，可以防止编译器和处理器对代码进行重排序，确保在获取 p.localSize 的值之后，后续的读操作都能看到最新的值。
+	// 在并发编程中，为了避免出现数据竞争和不一致的情况，需要使用适当的同步机制来确保内存的一致性。
+	// 使用原子加载的方式获取 p.localSize 的值可以保证读取到的值是其他 Goroutine 写入的最新值，这样就可以避免出现数据访问的竞争条件。
 	size := runtime_LoadAcquintptr(&p.localSize)
 	locals := p.local
-	// Try to steal one element from other procs.
+	// 尝试从其他 P 的
 	for i := 0; i < int(size); i++ {
+		// 依次获取其他 P 的 poolLocal
+		// TODO 此处仍然会获取到当前 P 的 Local，并从其共享队列的尾部获取，不符合既定的逻辑？
 		l := indexLocal(locals, (pid+i+1)%int(size))
+		// 作为其他 P 的 poolLocal 的共享队列消费者，从其他 P 的 poolLocal 的共享队列的尾部获取对象
 		if x, _ := l.shared.popTail(); x != nil {
 			return x
 		}
 	}
 
-	// Try the victim cache. We do this after attempting to steal
-	// from all primary caches because we want objects in the
-	// victim cache to age out if at all possible.
+	// 尝试从受害者缓存中获取对象，与从主缓存中获取步骤一致
 	size = atomic.LoadUintptr(&p.victimSize)
 	if uintptr(pid) >= size {
 		return nil
@@ -179,8 +182,7 @@ func (p *Pool) getSlow(pid int) interface{} {
 		}
 	}
 
-	// Mark the victim cache as empty for future gets don't bother
-	// with it.
+	// 取不到则将 victimSize 置位 0，下次就不会再从 victim 中取了
 	atomic.StoreUintptr(&p.victimSize, 0)
 
 	return nil
@@ -189,36 +191,37 @@ func (p *Pool) getSlow(pid int) interface{} {
 // 将当前 goroutine 固定到 P，禁用抢占并返回 P 的 poolLocal 和 P 的 ID
 // 调用方必须在处理完池后调用 runtime_procUnpin()
 func (p *Pool) pin() (*poolLocal, int) {
-	pid := runtime_procPin() // 将当前 goroutine 固定到 P
-	// 在 pinSlow 中，我们存储到 local，然后存储到 localSize，这里我们以相反的顺序加载。
-	// 由于我们禁用了抢占，因此 GC 不会在两者之间发生。因此，在这里我们必须观察到 local 至少和 localSize 一样大。
-	// 我们可以观察到一个较新的局部，这很好（我们必须观察它的零初始化性）。
-	s := runtime_LoadAcquintptr(&p.localSize) // 可以保证读取到的值是其他 Goroutine 写入的最新值，确保并发情况下的内存一致性和可见性
+	// 将当前 goroutine 固定到 P
+	pid := runtime_procPin()
+	// 在 pinSlow 中，先存储到 local，然后存储到 localSize，这里以相反的顺序加载
+	// 由于我们禁用了抢占，因此 GC 不会在两者之间发生，因此 local 至少和 localSize 一样大
+	// 可以保证读取到的值是其他 Goroutine 写入的最新值，确保并发情况下的内存一致性和可见性
+	s := runtime_LoadAcquintptr(&p.localSize)
 	l := p.local
 	if uintptr(pid) < s {
-		// P 的索引小于 local 数组的长度时，直接取索引处的 local 返回
+		// P 的索引小于 local 数组的长度时，直接取索引处的 poolLocal 返回
 		return indexLocal(l, pid), pid
 	}
-	return p.pinSlow()
+	return p.pinSlow() // 可能是 GOMAXPROCS 在 gc 的时候发生了改变
 }
 
 func (p *Pool) pinSlow() (*poolLocal, int) {
-	// Retry under the mutex.
-	// Can not lock the mutex while pinned.
+	// 在互斥锁下重试。G 被固定时无法锁定互斥锁。
 	runtime_procUnpin()
-	allPoolsMu.Lock()
+	allPoolsMu.Lock() // 保护 oldPools，避免在 poolCleanup 与 pinSlow 时有竞争
 	defer allPoolsMu.Unlock()
 	pid := runtime_procPin()
-	// poolCleanup won't be called while we are pinned.
+	// 当 G 被固定到 P 时，poolCleanup 不会被调用
 	s := p.localSize
 	l := p.local
 	if uintptr(pid) < s {
 		return indexLocal(l, pid), pid
 	}
+	// 说明 P 的最大数量发生改变，原先 Pool 的 local 数组小了，需要重新分配，并将旧的 Pool 在 gc 来临时置空
 	if p.local == nil {
 		allPools = append(allPools, p)
 	}
-	// If GOMAXPROCS changes between GCs, we re-allocate the array and lose the old one.
+	// 如果 GOMAXPROCS 在 gc 期间发生了改变，需要重新分配 local 数组并丢弃旧的数据
 	size := runtime.GOMAXPROCS(0) // 只获取先前设置的最大并发数，不实际改变其值
 	local := make([]poolLocal, size)
 	atomic.StorePointer(&p.local, unsafe.Pointer(&local[0])) // store-release
@@ -226,19 +229,15 @@ func (p *Pool) pinSlow() (*poolLocal, int) {
 	return &local[pid], pid
 }
 
+// 在垃圾回收开始时，STW 的情况下调用此函数，它不能分配，也可能不应该调用任何运行时函数
 func poolCleanup() {
-	// 在垃圾回收开始时，STW 的情况下调用此函数，它不能分配，也可能不应该调用任何运行时函数。
-
-	// Because the world is stopped, no pool user can be in a
-	// pinned section (in effect, this has all Ps pinned).
-
-	// Drop victim caches from all pools.
+	// 清除所有 Pool 中的受害者缓存
 	for _, p := range oldPools {
 		p.victim = nil
 		p.victimSize = 0
 	}
 
-	// Move primary cache to victim cache.
+	// 将主缓存中的数据移交给受害者缓存
 	for _, p := range allPools {
 		p.victim = p.local
 		p.victimSize = p.localSize
@@ -246,13 +245,12 @@ func poolCleanup() {
 		p.localSize = 0
 	}
 
-	// The pools with non-empty primary caches now have non-empty
-	// victim caches and no pools have primary caches.
+	// oldPools 具有非空的受害者缓存，并且没有主缓存
 	oldPools, allPools = allPools, nil
 }
 
 var (
-	allPoolsMu Mutex
+	allPoolsMu Mutex // 保护 oldPools，避免在 poolCleanup 与 pinSlow 时有竞争
 
 	// allPools 是具有非空主缓存的一组池。受 1) allPoolsMu and pinning or 2) STW 保护
 	allPools []*Pool
@@ -262,9 +260,11 @@ var (
 )
 
 func init() {
+	// 包初始化时，将 poolCleanup 函数注册到运行时的池子中，gc 时会调用该函数
 	runtime_registerPoolCleanup(poolCleanup)
 }
 
+// 返回第 i 个 poolLocal 对象，i 从 0 开始
 func indexLocal(l unsafe.Pointer, i int) *poolLocal {
 	lp := unsafe.Pointer(uintptr(l) + uintptr(i)*unsafe.Sizeof(poolLocal{}))
 	return (*poolLocal)(lp)

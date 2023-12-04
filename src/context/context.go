@@ -55,31 +55,12 @@ import (
 	"time"
 )
 
-// A Context carries a deadline, a cancellation signal, and other values across API boundaries.
-// Context's methods may be called by multiple goroutines simultaneously.
-//  一个携带了截止时间、取消信息、以及其他值的跨API界限的上下文可以被多个线程同时调用
+// Context 是一个携带了截止时间、取消信息、以及其他值的、跨API界限的、可以被多个线程同时调用的上下文
 type Context interface {
-	// Deadline returns the time when work done on behalf of this context
-	// should be canceled. Deadline returns ok==false when no deadline is set.
-	// Successive calls to Deadline return the same results.
-	// 当将要取消代表此上下文完成的工作时，返回截止时间。截止时间在未设置时返回 ok==false。对 Deadline 的连续调用将返回相同的结果。
+	// Deadline 当将要取消代表此上下文完成的工作时，返回截止时间。截止时间在未设置时返回 ok==false。对 Deadline 的连续调用将返回相同的结果。
 	Deadline() (deadline time.Time, ok bool)
 
-	// Done returns a channel that's closed when work done on behalf of this
-	// context should be canceled. Done may return nil if this context can
-	// never be canceled. Successive calls to Done return the same value.
-	// The close of the Done channel may happen asynchronously,
-	// after the cancel function returns.
-	//
-	// WithCancel arranges for Done to be closed when cancel is called;
-	// WithDeadline arranges for Done to be closed when the deadline
-	// expires; WithTimeout arranges for Done to be closed when the timeout
-	// elapses.
-	//
-	// Done is provided for use in select statements:
-	//
-	//  // Stream generates values with DoSomething and sends them to out
-	//  // until DoSomething returns an error or ctx.Done is closed.
+	// 	// Stream 使用 DoSomething 生成值并将它们发送到 out，直到 DoSomething 返回错误或 ctx.Done() 是关闭的。
 	//  func Stream(ctx context.Context, out chan<- Value) error {
 	//  	for {
 	//  		v, err := DoSomething(ctx)
@@ -93,85 +74,58 @@ type Context interface {
 	//  		}
 	//  	}
 	//  }
-	//
-	// See https://blog.golang.org/pipelines for more examples of how to use
-	// a Done channel for cancellation.
 	// 当将要取消代表此上下文完成的工作时，返回一个关闭的通道。
 	// 如果此上下文永远无法取消，则可能会返回 nil。连续调用返回相同的值。
 	// 在取消函数返回后，完成通道的关闭可能会异步发生。
-	// WithCancel 安排在调用 cancel 时关闭 Done;WithDeadline 安排在截止日期到期时关闭 Done; WithTimeout 安排在超时过后关闭 Done。
+	// WithCancel 安排在调用 cancel 时关闭 Done；
+	// WithDeadline 安排在截止日期到期时关闭 Done；
+	// WithTimeout 安排在超时过后关闭 Done；
 	// 该通道是只读的
-	Done() <-chan struct{}
 	// 在用户执行 case: <- ctx.Done() 时调用，调用Done函数时会惰性创建 chan
+	Done() <-chan struct{}
 
-	// If Done is not yet closed, Err returns nil.
-	// If Done is closed, Err returns a non-nil error explaining why:
-	// Canceled if the context was canceled
-	// or DeadlineExceeded if the context's deadline passed.
-	// After Err returns a non-nil error, successive calls to Err return the same error.
-	// 如果 Done 尚未关闭，则 Err 返回 nil。如果 Done 已关闭，则 Err 将返回一个非 nil 错误。
-	// 如果上下文已取消，则为“Canceled”;如果上下文的截止时间已过，则为“DeadlineExceeded”。
+	// Err 如果 Done 尚未关闭，则 Err 返回 nil。如果 Done 已关闭，则 Err 将返回一个非 nil 错误。
+	// 如果上下文已取消，则为“Canceled”；
+	// 如果上下文的截止时间已过，则为“DeadlineExceeded”；
 	// 在 Err 返回非 nil 错误后，对 Err 的连续调用将返回相同的错误。
 	Err() error
 
-	// Value returns the value associated with this context for key, or nil
-	// if no value is associated with key. Successive calls to Value with
-	// the same key returns the same result.
+	// Value 返回与此上下文关联的键值，如果没有值与键关联，则返回 nil。具有相同键的连续调用 Value 将返回相同的结果。
+	// 仅对传输进程和 API 边界的请求范围数据使用上下文值，而不对将可选参数传递给函数使用上下文值。
+	// 键标识上下文中的特定值。希望在上下文中存储值的函数通常在全局变量中分配一个键，然后将该键用作 context.WithValue 和 Context.Value 的参数。
+	// 键可以是任何支持相等的类型，包应将键定义为未导出的类型以避免冲突。定义上下文键的包应为使用该键存储的值提供类型安全的访问器：
 	//
-	// Use context values only for request-scoped data that transits
-	// processes and API boundaries, not for passing optional parameters to
-	// functions.
-	//
-	// A key identifies a specific value in a Context. Functions that wish
-	// to store values in Context typically allocate a key in a global
-	// variable then use that key as the argument to context.WithValue and
-	// Context.Value. A key can be any type that supports equality;
-	// packages should define keys as an unexported type to avoid
-	// collisions.
-	//
-	// Packages that define a Context key should provide type-safe accessors
-	// for the values stored using that key:
-	//
-	// 	// Package user defines a User type that's stored in Contexts.
+	// 	// Package 包 user 定义了一个 User 类型用于在上下文中存储
 	// 	package user
 	//
 	// 	import "context"
 	//
-	// 	// User is the type of value stored in the Contexts.
+	// 	// User 是存储在上下文中的值的类型
 	// 	type User struct {...}
 	//
-	// 	// key is an unexported type for keys defined in this package.
-	// 	// This prevents collisions with keys defined in other packages.
+	// 	// key 是定义在这个包中未导出的类型，这样可以防止与其他包中定义的 key 发生冲突
 	// 	type key int
 	//
-	// 	// userKey is the key for user.User values in Contexts. It is
-	// 	// unexported; clients use user.NewContext and user.FromContext
-	// 	// instead of using this key directly.
+	// 	// userKey 是存储在上下文中 user.User 类型的值，是非导出的，用户不能直接使用，需要用下面的函数创建
 	// 	var userKey key
 	//
-	// 	// NewContext returns a new Context that carries value u.
+	// 	// NewContext 返回一个值为 u 的新 Context
 	// 	func NewContext(ctx context.Context, u *User) context.Context {
 	// 		return context.WithValue(ctx, userKey, u)
 	// 	}
 	//
-	// 	// FromContext returns the User value stored in ctx, if any.
+	// 	// FromContext 返回一个类型为 User 存储在 ctx 中的值，如果有的话
 	// 	func FromContext(ctx context.Context) (*User, bool) {
 	// 		u, ok := ctx.Value(userKey).(*User)
 	// 		return u, ok
 	// 	}
-	// Value 返回与此上下文关联的键值，如果没有值与键关联，则返回 nil。具有相同键的连续调用 Value 将返回相同的结果。
-	// 仅对传输进程和 API 边界的请求范围数据使用上下文值，而不对将可选参数传递给函数使用上下文值。
-	// 键标识上下文中的特定值。希望在上下文中存储值的函数通常在全局变量中分配一个键，然后将该键用作context.WithValue 和 Context.Value的参数。
-	// 键可以是支持相等的任何类型;包应将键定义为未导出的类型以避免冲突。定义上下文键的包应为使用该键存储的值提供类型安全的访问器：
 	Value(key interface{}) interface{}
 }
 
-// Canceled is the error returned by Context.Err when the context is canceled.
-// 上下文取消的错误，当上下文取消时，在调用Context.Err()函数时返回
+// Canceled 上下文取消的错误，当上下文取消时，在调用Context.Err()函数时返回
 var Canceled = errors.New("context canceled")
 
-// DeadlineExceeded is the error returned by Context.Err when the context's deadline passes.
-// 上下文过期的错误，当上下文过期时，在调用Context.Err()函数时返回
+// DeadlineExceeded 上下文过期的错误，当上下文过期时，在调用Context.Err()函数时返回
 var DeadlineExceeded error = deadlineExceededError{}
 
 // 实现了 net.Error 接口，能用于网络请求的上下文
@@ -181,8 +135,6 @@ func (deadlineExceededError) Error() string   { return "context deadline exceede
 func (deadlineExceededError) Timeout() bool   { return true } // Is the error a timeout?
 func (deadlineExceededError) Temporary() bool { return true } // Is the error temporary?
 
-// An emptyCtx is never canceled, has no values, and has no deadline. It is not
-// struct{}, since vars of this type must have distinct addresses.
 // 一个空的上下文，emptyCtx 永远不会取消，没有值，也没有截止日期。它不是 struct{}，因为这种类型的变量必须具有不同的地址。
 type emptyCtx int
 
@@ -217,39 +169,24 @@ var (
 	todo       = new(emptyCtx)
 )
 
-// Background returns a non-nil, empty Context. It is never canceled, has no
-// values, and has no deadline. It is typically used by the main function,
-// initialization, and tests, and as the top-level Context for incoming requests.
 // Background 返回一个非 nil 的空上下文。它永远不会被取消，没有值，也没有截止日期。
 // 它通常由 main 函数、初始化和测试使用，并用作传入请求的顶级上下文。
 func Background() Context {
 	return background
 }
 
-// TODO returns a non-nil, empty Context. Code should use context.TODO when
-// it's unclear which Context to use or it is not yet available (because the
-// surrounding function has not yet been extended to accept a Context parameter).
-// TODO 返回一个非 nil 的空上下文。代码应使用上下文。当不清楚要使用哪个上下文或尚不可用时（因为周围的函数尚未扩展为接受上下文参数），则执行 TODO。
+// TODO 返回一个非 nil 的空上下文。代码应使用上下文。
+// 当不清楚要使用哪个上下文或尚不可用时（因为周围的函数尚未扩展为接受上下文参数），则执行 TODO。
 func TODO() Context {
 	return todo
 }
 
-// A CancelFunc tells an operation to abandon its work.
-// A CancelFunc does not wait for the work to stop.
-// A CancelFunc may be called by multiple goroutines simultaneously.
-// After the first call, subsequent calls to a CancelFunc do nothing.
-// CancelFunc，一个函数类型，表示取消函数的具体执行内容
+// CancelFunc 一个函数类型，表示取消函数的具体执行内容
 // 告诉操作者放弃其工作，不会等待工作停止
 // 能够被多个协程同时调用，当第一次被调用后，后续的调用不会做任何事情
 type CancelFunc func()
 
-// WithCancel returns a copy of parent with a new Done channel. The returned
-// context's Done channel is closed when the returned cancel function is called
-// or when the parent context's Done channel is closed, whichever happens first.
-//
-// Canceling this context releases resources associated with it, so code should
-// call cancel as soon as the operations running in this Context complete.
-// 返回一个基于 parent 上下文创建的可以取消的子上下文和一个取消函数
+// WithCancel 返回一个基于 parent 上下文创建的可以取消的子上下文和一个取消函数
 // 当返回的取消函数被调用时，或 parent 取消函数中的 Done 管道被关闭时，返回的子上下文中的 Done 管道也会关闭，以先发生者为准
 // 取消此上下文会释放与其关联的资源，因此代码应在此上下文中运行的操作完成后立即调用 cancel。
 func WithCancel(parent Context) (ctx Context, cancel CancelFunc) {
@@ -257,31 +194,27 @@ func WithCancel(parent Context) (ctx Context, cancel CancelFunc) {
 		panic("cannot create context from nil parent")
 	}
 	c := newCancelCtx(parent)
-	propagateCancel(parent, &c) // 将自己挂载到 parent，当 parent 取消或管道被关闭时，能自动或手动关闭自己
+	propagateCancel(parent, &c)                    // 将自己挂载到 parent，当 parent 取消或管道被关闭时，能自动或手动关闭自己
 	return &c, func() { c.cancel(true, Canceled) } // 该取消函数被执行时，一定返回了不为空的error
 }
 
-// newCancelCtx returns an initialized cancelCtx.
 // newCancelCtx 返回一个初始化后的取消上下文
 func newCancelCtx(parent Context) cancelCtx {
 	return cancelCtx{Context: parent}
 }
 
-// goroutines counts the number of goroutines ever created; for testing.
 // goroutines 记录已经创建的 goroutine 的数量，用于测试
 var goroutines int32
 
-// propagateCancel arranges for child to be canceled when parent is.
 // propagateCancel 传播取消，安排父上下文被取消时，子上下文也被取消
 func propagateCancel(parent Context, child canceler) {
 	done := parent.Done()
 	if done == nil { // 父节点为空，直接返回
-		return // parent is never canceled
+		return
 	}
 
 	select {
 	case <-done: // 该管道为只读，只有关闭后才会触发该条件，读到零值
-		// parent is already canceled
 		// 如果遍历子节点的时候，调用 child.cancel 函数传了 true，还会造成同时遍历和删除一个 map 的境地，会有问题的。
 		// 自己会被父节点删除，并置为nil，自己的子节点会自动和自己断绝关系，没必要再传入true
 		child.cancel(false, parent.Err()) // 表示父上下文已经取消，直接取消子上下文
@@ -290,10 +223,9 @@ func propagateCancel(parent Context, child canceler) {
 	}
 
 	// 找到可取消的父上下文
-	if p, ok := parentCancelCtx(parent); ok {// 找到了可取消的父上下文
+	if p, ok := parentCancelCtx(parent); ok { // 找到了可取消的父上下文
 		p.mu.Lock()
 		if p.err != nil { // 父上下文已经取消
-			// parent has already been canceled
 			child.cancel(false, p.err) // 表示父上下文已经取消，直接取消子上下文
 		} else {
 			if p.children == nil {
@@ -317,17 +249,10 @@ func propagateCancel(parent Context, child canceler) {
 	}
 }
 
-// &cancelCtxKey is the key that a cancelCtx returns itself for.
-// cancelCtx 为自身返回的key
+// cancelCtx 为自身返回的 key
 var cancelCtxKey int
 
-// parentCancelCtx returns the underlying *cancelCtx for parent.
-// It does this by looking up parent.Value(&cancelCtxKey) to find
-// the innermost enclosing *cancelCtx and then checking whether
-// parent.Done() matches that *cancelCtx. (If not, the *cancelCtx
-// has been wrapped in a custom implementation providing a
-// different done channel, in which case we should not bypass it.)
-// 判断 parent 对象是否为可以取消的上下文，并返回该可取消的上下文 *cancelCtx，
+// parentCancelCtx 判断 parent 对象是否为可以取消的上下文，并返回该可取消的上下文 *cancelCtx，
 // 通过 parent.Value(&cancelCtxKey) 找到里面封装的 *cancelCtx 并检查 parent.Done() 是否匹配 *cancelCtx
 func parentCancelCtx(parent Context) (*cancelCtx, bool) {
 	done := parent.Done()
@@ -346,8 +271,7 @@ func parentCancelCtx(parent Context) (*cancelCtx, bool) {
 	return p, true
 }
 
-// removeChild removes a context from its parent.
-// 从父上下文中移除子上下文
+// removeChild 从父上下文中移除子上下文
 func removeChild(parent Context, child canceler) {
 	p, ok := parentCancelCtx(parent) // 判断 parent 是否为可以取消的上下文
 	if !ok {
@@ -360,15 +284,12 @@ func removeChild(parent Context, child canceler) {
 	p.mu.Unlock()
 }
 
-// A canceler is a context type that can be canceled directly. The
-// implementations are *cancelCtx and *timerCtx.
 // 取消器是可以直接取消的上下文类型。实现者是 cancelCtx 和 timerCtx。
 type canceler interface {
 	cancel(removeFromParent bool, err error)
 	Done() <-chan struct{}
 }
 
-// closedchan is a reusable closed channel.
 // 可复用的关闭通道
 var closedchan = make(chan struct{})
 
@@ -376,18 +297,14 @@ func init() {
 	close(closedchan) // todo import, closed the chain at init
 }
 
-// A cancelCtx can be canceled. When canceled, it also cancels any children that implement canceler.
 // cancelCtx 可以被取消。当被取消后，它也能取消所有实现了canceler的子项
 type cancelCtx struct {
 	Context
 
-	mu sync.Mutex // protects following fields
-	// 原子类型的值，存储了空结构体管道，懒惰式被创建，该取消函数第一次被调用时关闭它
-	done atomic.Value // of chan struct{}, created lazily, closed by first cancel call
-	// 存储实现了 canceler 接口的子上下文，该取消函数第一次被调用时置为nil
-	children map[canceler]struct{} // set to nil by the first cancel call
-	// 该取消函数第一次被调用时设置为非空的错误
-	err error // set to non-nil by the first cancel call
+	mu       sync.Mutex            // 保护下述字段
+	done     atomic.Value          // 原子类型的值，存储了空结构体管道，懒惰式被创建，该取消函数第一次被调用时关闭它
+	children map[canceler]struct{} // 存储实现了 canceler 接口的子上下文，该取消函数第一次被调用时置为 nil
+	err      error                 // 该取消函数第一次被调用时设置为非空的错误
 }
 
 func (c *cancelCtx) Value(key interface{}) interface{} {
@@ -399,7 +316,7 @@ func (c *cancelCtx) Value(key interface{}) interface{} {
 	return c.Context.Value(key)
 }
 
-// 函数返回的是一个只读的 channel，而且没有地方向这个 channel 里面写数据。
+// Done 函数返回的是一个只读的 channel，而且没有地方向这个 channel 里面写数据。
 // 所以，直接调用读这个 channel，协程会被 block 住。一般通过搭配 select 来使用。一旦关闭，就会立即读出零值。
 func (c *cancelCtx) Done() <-chan struct{} {
 	d := c.done.Load() // c.done 是否有值，有则直接断言后返回
@@ -439,8 +356,6 @@ func (c *cancelCtx) String() string {
 	return contextName(c.Context) + ".WithCancel"
 }
 
-// cancel closes c.done, cancels each of c's children, and, if
-// removeFromParent is true, removes c from its parent's children.
 // 该取消函数会关闭 c 中 done 管道，递归取消所有的子上下文，如果 removeFromParent 为真，则将 c 从父上下文中移除
 func (c *cancelCtx) cancel(removeFromParent bool, err error) {
 	if err == nil { // 从被执行的地方传入一个不为空的err，有可能是父上下文的err，有可能是DeadlineExceeded、Canceled
@@ -460,7 +375,6 @@ func (c *cancelCtx) cancel(removeFromParent bool, err error) {
 		close(d)
 	}
 	for child := range c.children {
-		// NOTE: acquiring the child's lock while holding parent's lock.
 		// 遍历所有子上下文，并递归执行取消函数
 		child.cancel(false, err)
 	}
@@ -472,15 +386,6 @@ func (c *cancelCtx) cancel(removeFromParent bool, err error) {
 	}
 }
 
-// WithDeadline returns a copy of the parent context with the deadline adjusted
-// to be no later than d. If the parent's deadline is already earlier than d,
-// WithDeadline(parent, d) is semantically equivalent to parent. The returned
-// context's Done channel is closed when the deadline expires, when the returned
-// cancel function is called, or when the parent context's Done channel is
-// closed, whichever happens first.
-//
-// Canceling this context releases resources associated with it, so code should
-// call cancel as soon as the operations running in this Context complete.
 // WithDeadline 返回父上下文的副本，并将截止日期调整为不晚于 d。
 // 如果父级的截止时间已经早于 d，则 WithDeadline（parent， d） 在语义上等效于父级。
 // 当截止时间到期、调用返回的取消函数或父上下文的 Done 通道关闭时，返回的上下文的 Done 通道将关闭，以先发生者为准。
@@ -491,7 +396,6 @@ func WithDeadline(parent Context, d time.Time) (Context, CancelFunc) {
 	}
 	// 判断父上下文是否设置了截止时间，以及截止时间是否早于当前设置的截止时间
 	if cur, ok := parent.Deadline(); ok && cur.Before(d) {
-		// The current deadline is already sooner than the new one.
 		// 父上下文设置的截止时间更早，则直接从父上下文中创建，用的是父上下文的截止时间
 		return WithCancel(parent)
 	}
@@ -516,10 +420,7 @@ func WithDeadline(parent Context, d time.Time) (Context, CancelFunc) {
 	return c, func() { c.cancel(true, Canceled) }
 }
 
-// A timerCtx carries a timer and a deadline. It embeds a cancelCtx to
-// implement Done and Err. It implements cancel by stopping its timer then
-// delegating to cancelCtx.cancel.
-// timerCtx带有计时器和截止日期。它嵌入了一个 cancelCtx 来实现 Done 和 Err。
+// timerCtx 带有计时器和截止日期。它嵌入了一个 cancelCtx 来实现 Done 和 Err。
 // 它通过停止其计时器然后委托给 cancelCtx.cancel 来实现取消。
 type timerCtx struct {
 	cancelCtx
@@ -528,7 +429,7 @@ type timerCtx struct {
 	deadline time.Time
 }
 
-// 返回 timerCtx 的截止时间
+// Deadline 返回 timerCtx 的截止时间
 func (c *timerCtx) Deadline() (deadline time.Time, ok bool) {
 	return c.deadline, true
 }
@@ -568,18 +469,6 @@ func WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc) {
 	return WithDeadline(parent, time.Now().Add(timeout))
 }
 
-// WithValue returns a copy of parent in which the value associated with key is val.
-//
-// Use context Values only for request-scoped data that transits processes and
-// APIs, not for passing optional parameters to functions.
-//
-// The provided key must be comparable and should not be of type
-// string or any other built-in type to avoid collisions between
-// packages using context. Users of WithValue should define their own
-// types for keys. To avoid allocating when assigning to an
-// interface{}, context keys often have concrete type
-// struct{}. Alternatively, exported context key variables' static
-// type should be a pointer or interface.
 // WithValue 返回父级的副本，其中与 key 关联的值为 val。
 // 仅对传输进程和 API 的请求范围的数据使用上下文值，而不对将可选参数传递给函数。
 // todo 提供的key必须是可比的，并且不应是字符串类型或任何其他内置类型，以避免使用上下文的包之间发生冲突。
@@ -592,14 +481,12 @@ func WithValue(parent Context, key, val interface{}) Context {
 	if key == nil {
 		panic("nil key")
 	}
-	if !reflectlite.TypeOf(key).Comparable() {// key 是需要可以比较的类型
+	if !reflectlite.TypeOf(key).Comparable() { // key 是需要可以比较的类型
 		panic("key is not comparable")
 	}
 	return &valueCtx{parent, key, val}
 }
 
-// A valueCtx carries a key-value pair. It implements Value for that key and
-// delegates all other calls to the embedded Context.
 // valueCtx 携带一个键值对。它实现该键的值，并将所有其他调用委托给嵌入式上下文。
 // key 是需要可以比较的类型
 type valueCtx struct {
@@ -625,7 +512,8 @@ func (c *valueCtx) String() string {
 		reflectlite.TypeOf(c.key).String() +
 		", val " + stringify(c.val) + ")"
 }
-// 它会顺着链路一直往上找，比较当前节点的 key
+
+// Value 它会顺着链路一直往上找，比较当前节点的 key
 // 是否是要找的 key，如果是，则直接返回 value。否则，一直顺着 context 往上，最终找到根节点（一般是 emptyCtx），直接返回一个 nil。
 // 所以用 Value 方法的时候要判断结果是否为 nil。
 func (c *valueCtx) Value(key interface{}) interface{} {
