@@ -2,49 +2,31 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package context defines the Context type, which carries deadlines,
-// cancellation signals, and other request-scoped values across API boundaries
-// and between processes.
-//
-// Incoming requests to a server should create a Context, and outgoing
-// calls to servers should accept a Context. The chain of function
-// calls between them must propagate the Context, optionally replacing
-// it with a derived Context created using WithCancel, WithDeadline,
-// WithTimeout, or WithValue. When a Context is canceled, all
-// Contexts derived from it are also canceled.
-//
-// The WithCancel, WithDeadline, and WithTimeout functions take a
-// Context (the parent) and return a derived Context (the child) and a
-// CancelFunc. Calling the CancelFunc cancels the child and its
-// children, removes the parent's reference to the child, and stops
-// any associated timers. Failing to call the CancelFunc leaks the
-// child and its children until the parent is canceled or the timer
-// fires. The go vet tool checks that CancelFuncs are used on all
-// control-flow paths.
-//
-// Programs that use Contexts should follow these rules to keep interfaces
-// consistent across packages and enable static analysis tools to check context
-// propagation:
-//
-// Do not store Contexts inside a struct type; instead, pass a Context
-// explicitly to each function that needs it. The Context should be the first
-// parameter, typically named ctx:
-//
+// Package context 包定义了context类型，其中包含截止日期、取消信号以及其他跨API边界和进程之间的请求作用域值。
+// 对服务器的传入请求应该创建上下文，对服务器的传出调用应该接受上下文。
+// 它们之间的函数调用链必须传播上下文，可以选择将其替换为使用 WithCancel、WithDeadline、WithTimeout 或 WithValue 创建的派生上下文。
+// 当 Context 被取消时，所有从它派生的上下文也被取消。
+// WithCancel、WithDeadline 和 WithTimeout 函数接受一个 Context(父类) 并返回一个派生 Context(子类) 和一个 CancelFunc。
+// 调用 CancelFunc 会取消子进程及其子进程，移除父进程对子进程的引用，并停止所有相关的计时器。
+// 未能调用 CancelFunc 会泄漏子进程及其子进程，直到父进程被取消或计时器触发。
+// go - vet 工具检查在所有控制流路径上是否使用了 CancelFuncs。
+// 使用上下文的程序应该遵循这些规则，以保持包间接口的一致性，并使静态分析工具能够检查上下文传播:不要在结构类型中存储上下文;
+// 相反，将上下文显式地传递给需要它的每个函数。Context应该是第一个参数，通常命名为ctx:
 // 	func DoSomething(ctx context.Context, arg Arg) error {
 // 		// ... use ctx ...
 // 	}
-//
-// Do not pass a nil Context, even if a function permits it. Pass context.TODO
-// if you are unsure about which Context to use.
-//
-// Use context Values only for request-scoped data that transits processes and
-// APIs, not for passing optional parameters to functions.
-//
-// The same Context may be passed to functions running in different goroutines;
-// Contexts are safe for simultaneous use by multiple goroutines.
-//
-// See https://blog.golang.org/context for example code for a server that uses
-// Contexts.
+// 即使函数允许，也不要传递nil上下文。通过上下文。如果您不确定要使用哪个上下文，则 TODO。
+// 仅将上下文值用于传输进程和 api 的请求作用域数据，不能用于向函数传递可选参数。
+// 同一个 Context 可以被传递给运行在不同协程中的函数；上下文对于多个协程同时使用是安全的；
+// 请参阅https://blog.golang.org/context获取使用上下文的服务器的示例代码。
+// 在 Go 语言中，context 包提供了一种在并发操作中传递请求作用域的方法。Context 可以用于控制并发操作、取消操作、超时处理等，并且是在 Go 语言中处理并发时非常重要和常用的工具。
+// Context 的基本原理可以概括如下：
+// Context 是一个接口类型，它定义了跟踪请求的截止日期、取消信号和请求范围值等功能。
+// 通过 context.Background() 或 context.TODO() 创建一个根 Context 对象。
+// 通过 context.WithCancel(parent Context)、context.WithDeadline(parent Context, time.Time)、context.WithTimeout(parent Context, time.Duration) 或 context.WithValue(parent Context, key interface{}, val interface{}) 等方法可以从父 Context 派生出新的 Context 对象。
+// 任意一个 Context 都可以被用来取消自身或者派生出新的 Context，从而传播取消信号。
+// 在并发操作中，可以通过 Context 对象的 .Done() 方法来获取一个通道（channel），当 Context 被取消或者超时时，这个通道会关闭，可以通过监听这个通道来处理取消或超时的情况。
+// 总的来说，Context 的基本原理就是通过创建和传播 Context 对象来管理并发操作的请求作用域，实现控制和取消操作、处理超时等功能。这使得在 Go 中编写并发安全的代码变得更加方便和可靠。
 package context
 
 import (
@@ -55,6 +37,10 @@ import (
 	"time"
 )
 
+// Context 在 Go 服务器中，每个传入的请求都在自己的 goroutine 中处理。
+// 请求处理程序通常会启动额外的 goroutine 来访问后端，例如 数据库和 RPC 服务。
+// 处理请求的 goroutine 集通常需要访问 特定于请求的值，例如最终用户的身份、授权 令牌和请求的截止时间。
+// 当请求被取消或超时时，所有 goroutine 都会处理该请求 请求应快速退出，以便系统可以回收它们所在的任何资源 用。
 // Context 是一个携带了截止时间、取消信息、以及其他值的、跨API界限的、可以被多个线程同时调用的上下文
 type Context interface {
 	// Deadline 当将要取消代表此上下文完成的工作时，返回截止时间。截止时间在未设置时返回 ok==false。对 Deadline 的连续调用将返回相同的结果。
@@ -141,19 +127,15 @@ type emptyCtx int
 func (*emptyCtx) Deadline() (deadline time.Time, ok bool) {
 	return
 }
-
 func (*emptyCtx) Done() <-chan struct{} {
 	return nil
 }
-
 func (*emptyCtx) Err() error {
 	return nil
 }
-
 func (*emptyCtx) Value(key interface{}) interface{} {
 	return nil
 }
-
 func (e *emptyCtx) String() string {
 	switch e {
 	case background:
@@ -169,15 +151,15 @@ var (
 	todo       = new(emptyCtx)
 )
 
-// Background 返回一个非 nil 的空上下文。它永远不会被取消，没有值，也没有截止日期。
-// 它通常由 main 函数、初始化和测试使用，并用作传入请求的顶级上下文。
+// Background 它通常由 main 函数、初始化和测试使用，并用作传入请求的顶级上下文。
 func Background() Context {
+	// 返回一个非 nil 的空上下文。它永远不会被取消，没有值，也没有截止日期。
 	return background
 }
 
-// TODO 返回一个非 nil 的空上下文。代码应使用上下文。
-// 当不清楚要使用哪个上下文或尚不可用时（因为周围的函数尚未扩展为接受上下文参数），则执行 TODO。
+// TODO 当不清楚要使用哪个上下文或尚不可用时（因为周围的函数尚未扩展为接受上下文参数），则执行 TODO。
 func TODO() Context {
+	// 返回一个非 nil 的空上下文。代码应使用上下文。
 	return todo
 }
 
@@ -214,7 +196,8 @@ func propagateCancel(parent Context, child canceler) {
 	}
 
 	select {
-	case <-done: // 该管道为只读，只有关闭后才会触发该条件，读到零值
+	case <-done:
+		// 该管道为只读，只有关闭后才会触发该条件，读到零值
 		// 如果遍历子节点的时候，调用 child.cancel 函数传了 true，还会造成同时遍历和删除一个 map 的境地，会有问题的。
 		// 自己会被父节点删除，并置为nil，自己的子节点会自动和自己断绝关系，没必要再传入true
 		child.cancel(false, parent.Err()) // 表示父上下文已经取消，直接取消子上下文
@@ -222,8 +205,9 @@ func propagateCancel(parent Context, child canceler) {
 	default:
 	}
 
-	// 找到可取消的父上下文
-	if p, ok := parentCancelCtx(parent); ok { // 找到了可取消的父上下文
+	// 判断 parent 是否为可以取消的 context
+	if p, ok := parentCancelCtx(parent); ok {
+		// parent 是可以取消的
 		p.mu.Lock()
 		if p.err != nil { // 父上下文已经取消
 			child.cancel(false, p.err) // 表示父上下文已经取消，直接取消子上下文
@@ -231,12 +215,13 @@ func propagateCancel(parent Context, child canceler) {
 			if p.children == nil {
 				p.children = make(map[canceler]struct{})
 			}
-			// todo import，父节点未取消，将自己挂载到父节点上，才能在父上下文取消的时候自动取消自己
+			// todo important，父节点未取消，将自己挂载到父节点上，才能在父上下文取消的时候自动取消自己
 			p.children[child] = struct{}{}
 		}
 		p.mu.Unlock()
-	} else { // 未找到可取消的父上下文
-		// 此时 child 无法挂载到 parent，parent 取消是，无法自动取消child
+	} else {
+		// parent 是不可以取消的
+		// 此时 child 无法挂载到 parent，parent 取消时，无法自动取消child
 		atomic.AddInt32(&goroutines, +1)
 		go func() {
 			// 同时监听 parent 和 child，监听到parent关闭时手动关闭child，监听到child被其他协程关闭时退出
@@ -253,12 +238,12 @@ func propagateCancel(parent Context, child canceler) {
 var cancelCtxKey int
 
 // parentCancelCtx 判断 parent 对象是否为可以取消的上下文，并返回该可取消的上下文 *cancelCtx，
-// 通过 parent.Value(&cancelCtxKey) 找到里面封装的 *cancelCtx 并检查 parent.Done() 是否匹配 *cancelCtx
 func parentCancelCtx(parent Context) (*cancelCtx, bool) {
 	done := parent.Done()
 	if done == closedchan || done == nil {
 		return nil, false
 	}
+	// 通过 parent.Value(&cancelCtxKey) 找到里面封装的 *cancelCtx 并检查 parent.Done() 是否匹配 *cancelCtx
 	p, ok := parent.Value(&cancelCtxKey).(*cancelCtx)
 	if !ok { // 判断是否为可以断言为可以取消的上下文
 		return nil, false
@@ -273,7 +258,8 @@ func parentCancelCtx(parent Context) (*cancelCtx, bool) {
 
 // removeChild 从父上下文中移除子上下文
 func removeChild(parent Context, child canceler) {
-	p, ok := parentCancelCtx(parent) // 判断 parent 是否为可以取消的上下文
+	// 判断 parent 是否为可以取消的上下文，只有 cancelCtx 才有子上下文
+	p, ok := parentCancelCtx(parent)
 	if !ok {
 		return
 	}
@@ -307,8 +293,8 @@ type cancelCtx struct {
 	err      error                 // 该取消函数第一次被调用时设置为非空的错误
 }
 
+// Value 通过 key 获取 Value，如果 key 是取消上下文的 cancelCtxKey，则返回自身
 func (c *cancelCtx) Value(key interface{}) interface{} {
-	// 通过key获取Value，如果key是取消上下文的key，则返回自身
 	// 用于判断父上下文对应的对象是否为自己，即是可取消的上下文
 	if key == &cancelCtxKey {
 		return c
@@ -370,12 +356,13 @@ func (c *cancelCtx) cancel(removeFromParent bool, err error) {
 	d, _ := c.done.Load().(chan struct{})
 	// 关闭该上下文中的管道，通知其他协程
 	if d == nil {
+		// 表示 Done 函数没有没调用过，给 d 存储一个关闭的管道
 		c.done.Store(closedchan)
 	} else {
 		close(d)
 	}
 	for child := range c.children {
-		// 遍历所有子上下文，并递归执行取消函数
+		// 遍历所有子上下文，并递归执行子函数的取消函数
 		child.cancel(false, err)
 	}
 	c.children = nil
@@ -404,7 +391,8 @@ func WithDeadline(parent Context, d time.Time) (Context, CancelFunc) {
 		cancelCtx: newCancelCtx(parent),
 		deadline:  d,
 	}
-	propagateCancel(parent, c) // 将自己挂载到 parent，当 parent 取消或管道被关闭时，能自动或手动关闭自己
+	// 将自己挂载到 parent，当 parent 取消或管道被关闭时，能自动或手动关闭自己
+	propagateCancel(parent, c)
 	dur := time.Until(d)
 	if dur <= 0 {
 		c.cancel(true, DeadlineExceeded) // deadline has already passed
@@ -424,8 +412,8 @@ func WithDeadline(parent Context, d time.Time) (Context, CancelFunc) {
 // 它通过停止其计时器然后委托给 cancelCtx.cancel 来实现取消。
 type timerCtx struct {
 	cancelCtx
-	timer *time.Timer // Under cancelCtx.mu.
-	// Timer 会在 deadline 到来时，自动取消 context。
+	// timer 会在 deadline 到来时，自动取消 context。
+	timer    *time.Timer
 	deadline time.Time
 }
 
@@ -442,7 +430,7 @@ func (c *timerCtx) String() string {
 }
 
 func (c *timerCtx) cancel(removeFromParent bool, err error) {
-	c.cancelCtx.cancel(false, err) // todo 执行 cancelCtx 的取消函数？
+	c.cancelCtx.cancel(false, err) // 执行 cancelCtx 的取消函数
 	if removeFromParent {
 		// Remove this timerCtx from its parent cancelCtx's children.
 		removeChild(c.cancelCtx.Context, c)
@@ -494,9 +482,7 @@ type valueCtx struct {
 	key, val interface{}
 }
 
-// stringify tries a bit to stringify v, without using fmt, since we don't
-// want context depending on the unicode tables. This is only used by
-// *valueCtx.String().
+// stringify 尝试在不使用 fmt 的情况下对 V 进行字符串化，因为我们不希望上下文依赖于 Unicode 表。这仅由 valueCtx.String（） 使用。
 func stringify(v interface{}) string {
 	switch s := v.(type) {
 	case stringer:

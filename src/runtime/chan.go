@@ -4,18 +4,12 @@
 
 package runtime
 
-// This file contains the implementation of Go channels.
-
-// Invariants:
-//  At least one of c.sendq and c.recvq is empty,
-//  except for the case of an unbuffered channel with a single goroutine
-//  blocked on it for both sending and receiving using a select statement,
-//  in which case the length of c.sendq and c.recvq is limited only by the
-//  size of the select statement.
-//
-// For buffered channels, also:
-//  c.qcount > 0 implies that c.recvq is empty.
-//  c.qcount < c.dataqsiz implies that c.sendq is empty.
+// 不变量:
+// c.sendq 和 c.recvq 中至少有一个是空的，除非是一个没有缓冲的通道，在使用 select 语句发送和接收时，
+// 它被一个单独的线程阻塞，在这种情况下，c.sendq 和 c.recvq 的长度只受 select 语句大小的限制。
+// 对于有缓冲区的 chan 也是如此
+//  c.qcount > 0 时， c.recvq 为空.
+//  c.qcount < c.dataqsiz 时， c.sendq 为空.
 
 import (
 	"runtime/internal/atomic"
@@ -25,43 +19,27 @@ import (
 
 const (
 	// 用来设置内存最大对齐值，对应就是64位系统下cache line的大小
-	maxAlign  = 8
+	maxAlign = 8
 	//  向上进行 8 字节内存对齐，假设hchan{}大小是14，hchanSize是16。
 	hchanSize = unsafe.Sizeof(hchan{}) + uintptr(-int(unsafe.Sizeof(hchan{}))&(maxAlign-1))
 	debugChan = false
 )
 
 type hchan struct {
-	// chan 中的数据量
-	qcount   uint
-	// chan 循环队列的长度，底层是数组
-	dataqsiz uint
-	// chan 指向底层缓冲数组的指针
-	buf      unsafe.Pointer
-	// chan 中元素大小
-	elemsize uint16
-	// chan 是否被关闭，非0表示关闭
-	closed   uint32
-	// chan 中元素类型
-	elemtype *_type
-	// 生产队列可发送的元素在数组中的索引，即从此处开始写入
-	sendx    uint
-	// 消费队列可接收的元素在数组中的索引，即从此处开始消费
-	recvx    uint
-	// 等待接收数据的goroutine队列，消费队列
-	recvq    waitq
-	// 等待发送数据的goroutine队列，生产队列
-	sendq    waitq
+	qcount   uint           // chan 中的数据量
+	dataqsiz uint           // chan 循环队列的长度，底层是数组
+	buf      unsafe.Pointer // chan 指向底层缓冲数组的指针
+	elemsize uint16         // chan 中元素大小
+	closed   uint32         // chan 是否被关闭，非0表示关闭
+	elemtype *_type         // chan 中元素类型
+	sendx    uint           // 生产队列可发送的元素在数组中的索引，即从此处开始写入
+	recvx    uint           // 消费队列可接收的元素在数组中的索引，即从此处开始消费
+	recvq    waitq          // 等待接收数据的goroutine队列，消费队列
+	sendq    waitq          // 等待发送数据的goroutine队列，生产队列
 
-	// lock protects all fields in hchan, as well as several
-	// fields in sudogs blocked on this channel.
-	//
-	// Do not change another G's status while holding this lock
-	// (in particular, do not ready a G), as this can deadlock
-	// with stack shrinking.
+	// 锁定保护 hchan 中的所有字段，以及阻塞在此通道上的 sudogs 中的多个字段。
+	// 在保持此锁时不要更改另一个 G 的状态（特别是不要把 G 转为准备状态），因为这可能会导致堆栈收缩而死锁。
 	lock mutex
-	// 锁定保护 HCHAN 中的所有字段，以及此通道上阻止的 Sudog 中的多个字段。
-	// 在保持此锁时不要更改另一个 G 的状态（特别是不要准备 G），因为这可能会导致堆栈收缩而死锁。
 }
 
 // goroutine 的生产队列或消费队列
@@ -86,12 +64,12 @@ func makechan64(t *chantype, size int64) *hchan {
 func makechan(t *chantype, size int) *hchan {
 	elem := t.elem
 
-	// compiler checks this but be safe.
+	// 编译器校验类型，但是是非安全的
 	if elem.size >= 1<<16 { // 元素类型判断
 		throw("makechan: invalid channel element type")
 	}
-	// todo hchanSize?
-	if hchanSize%maxAlign != 0 || elem.align > maxAlign { // 元素对齐方式判断
+	// 元素对齐方式校验
+	if hchanSize%maxAlign != 0 || elem.align > maxAlign {
 		throw("makechan: bad alignment")
 	}
 
@@ -101,12 +79,9 @@ func makechan(t *chantype, size int) *hchan {
 		panic(plainError("makechan: size out of range"))
 	}
 
-	// Hchan does not contain pointers interesting for GC when elements stored in buf do not contain pointers.
-	// buf points into the same allocation, elemtype is persistent.
-	// SudoG's are referenced from their owning thread so they can't be collected.
-	// TODO(dvyukov,rlh): Rethink when collector can move allocated objects.
-	// 当存储在 buf 中的元素不包含指针时，Hchan 不包含对 GC 感兴趣的指针。BUF点到相同的分配中，elemtype是持久的。
-	// SudoG 是从其所属线程引用的，因此无法收集它们。
+
+	// 当存储在 buf 中的元素不包含指针时，Hchan 不包含对 GC 感兴趣的指针。指向相同的分配的buf中elemtype是持久的。
+	// SudoG's 是从其所属线程引用的，因此无法收集它们。
 	// 如果 hchan 结构体中不含指针，GC 就不会扫描 chan 中的元素
 	var c *hchan
 	switch {
@@ -117,23 +92,20 @@ func makechan(t *chantype, size int) *hchan {
 		// Race detector uses this location for synchronization.
 		c.buf = c.raceaddr()
 	case elem.ptrdata == 0:
-		// Elements do not contain pointers.
-		// Allocate hchan and buf in one call.
 		// 元素不包含指针。在一次调用中分配 hchan 和 buf。
 		// 当通道数据元素不含指针，hchan和buf内存空间调用mallocgc一次性分配完成，hchanSize用来分配通道的内存，mem用来分配buf的内存
 		c = (*hchan)(mallocgc(hchanSize+mem, nil, true))
 		// c 为指向 hchan 的指针，再加上该结构的大小 hchanSize，即可得到指向 buf的指针，它们在内存上是连续的
 		c.buf = add(unsafe.Pointer(c), hchanSize)
 	default:
-		// Elements contain pointers.
-		// 通道中的元素包含指针，分别创建 chan 和 buf 的内存空间
+		// 通道中的元素包含指针，分别创建 chan 和 buf 的内存空间，方便 gc 进行内存回收
 		c = new(hchan)
 		c.buf = mallocgc(mem, elem, true)
 	}
 
-	c.elemsize = uint16(elem.size) // 元素大小
-	c.elemtype = elem // 元素类型
-	c.dataqsiz = uint(size) // chan 的容量
+	c.elemsize = uint16(elem.size)   // 元素大小
+	c.elemtype = elem                // 元素类型
+	c.dataqsiz = uint(size)          // chan 的容量
 	lockInit(&c.lock, lockRankHchan) // todo ？
 
 	if debugChan {
@@ -142,66 +114,43 @@ func makechan(t *chantype, size int) *hchan {
 	return c
 }
 
-// chanbuf(c, i) is pointer to the i'th slot in the buffer.
-// 获取 buf 中第 i 个位置的元素
+// chanbuf 获取 buf 中第 i 个位置的元素
 func chanbuf(c *hchan, i uint) unsafe.Pointer {
 	return add(c.buf, uintptr(i)*uintptr(c.elemsize))
 }
 
-// full reports whether a send on c would block (that is, the channel is full).
-// It uses a single word-sized read of mutable state, so although
-// the answer is instantaneously true, the correct answer may have changed
-// by the time the calling function receives the return value.
-// Full 报告在 C 上的发送是否会阻塞（即通道已满）。
-// 它使用单个字大小的读取可变状态，因此尽管答案是即时正确的，但在调用函数收到返回值时，正确答案可能已经改变。
 // full 函数检测 channel 缓冲区是否已满，主要分为两种情况:
 // 如果 channel 没有缓冲区，查看是否存在接收者
 // 如果 channel 有缓冲区, 比较元素数量和缓冲区长度是否一致
 func full(c *hchan) bool {
-	// c.dataqsiz is immutable (never written after the channel is created)
-	// so it is safe to read at any time during channel operation.
 	// c.dataqsiz 是不可变的（在创建通道后永远不会写入），因此在通道操作期间随时读取是安全的。
-	if c.dataqsiz == 0 { // 无缓冲，且没有消费队列
-		// Assumes that a pointer read is relaxed-atomic.
+	if c.dataqsiz == 0 {
+		// 无缓冲，且没有消费队列
 		return c.recvq.first == nil
 	}
-	// Assumes that a uint read is relaxed-atomic.
 	// 有缓冲，且缓冲区大小和chan中实际元素个数相等，即满了
 	return c.qcount == c.dataqsiz
 }
 
-// entry point for c <- x from compiled code
-//go:nosplit
-// 编译代码中 C <- X 的入口点
+// go:nosplit 编译代码中 c <- X 的入口点
 func chansend1(c *hchan, elem unsafe.Pointer) {
 	chansend(c, elem, true, getcallerpc())
 }
 
-/*
- * generic single channel send/recv
- * If block is not nil,
- * then the protocol will not
- * sleep but return if it could
- * not complete.
- *
- * sleep can wake up with g.param == nil
- * when a channel involved in the sleep has
- * been closed.  it is easiest to loop and re-run
- * the operation; we'll see that it's now closed.
- */
-// 一般情况下，单向的接收或发送通道，，但如果无法完成则返回。
+
+// 通用的单向接收或发送通道，如果block不是nil，那么协议将不会休眠，但如果无法完成则返回。
 // 当休眠中涉及的通道关闭时，休眠可以使用 g.param == nil 唤醒。循环并重新运行操作最容易;我们将看到它现在已经关闭。
+
 // 返回 false 表示写入失败
 func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
-	// 如果 block 为 false，协议将不允许被阻塞，不等于非缓冲
+	// 如果 block 为 false，goroutine 将不允许被阻塞，不等于非缓冲
 	if c == nil {
-		// chan 为 nil
 		// 非阻塞模式下直接返回
 		if !block {
 			return false
 		}
 		// 阻塞模式下，直接阻塞当前写入协程
-		// 调用gopark将当前Goroutine休眠，关闭 nil 的 chan 会panic，故当前Goroutine会一直休眠，陷入死锁
+		// 调用 gopark 将当前 goroutine 休眠，关闭 nil 的 chan 会 panic，故当前 goroutine 会一直休眠，陷入死锁
 		gopark(nil, nil, waitReasonChanSendNilChan, traceEvGoStop, 2)
 		throw("unreachable")
 	}
@@ -236,7 +185,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 	// 由于闭合通道无法从“准备发送”过渡到“未准备好发送”，因此即使通道在两个观测值之间关闭，它们也意味着当通道尚未关闭且尚未准备好发送时，两者之间存在一个时刻。
 	// 我们的行为就好像我们当时观察了通道，并报告发送无法继续。如果读取在这里重新排序是可以的：如果我们观察到通道尚未准备好发送，然后观察到它没有关闭，这意味着在第一次观察期间通道没有关闭。
 	// 然而，这里没有任何东西能保证向前推进。我们依靠 chanrecv（） 和 closechan（） 中锁释放的副作用来更新这个线程对 c.closed 和 full（） 的看法。
-	// 非阻塞模式，且chan没有关闭，但已经满了
+	// c 不为 nil，非阻塞模式，且chan没有关闭，但已经满了
 	if !block && c.closed == 0 && full(c) {
 		return false
 	}
@@ -245,8 +194,8 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 	// 1，阻塞模式，block==true；
 	// 2，chan 已经关闭；
 	// 3，管道非满的情况
-	// 3.1 无缓冲管道，且接收队列不为空；
-	// 3.2 缓冲管道，但缓冲管道未满
+	// 	3.1 无缓冲管道，且接收队列不为空；
+	// 	3.2 缓冲管道，但缓冲管道未满
 	var t0 int64
 	if blockprofilerate > 0 {
 		t0 = cputicks()
@@ -260,19 +209,16 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 	}
 
 	// 执行到此处，说明管道是未关闭的，阻塞模式或管道非满
-	// 从接收者队列recvq中取出一个接收者，接收者不为空情况下，直接将数据传递给该接收者
+	// 从接收者队列 recvq 中取出一个接收者，接收者不为空情况下，直接将数据传递给该接收者
 	// 3.1 无缓冲管道，且接收队列不为空；即使非阻塞能写则写
 	if sg := c.recvq.dequeue(); sg != nil {
-		// Found a waiting receiver. We pass the value we want to send
-		// directly to the receiver, bypassing the channel buffer (if any).
-		// todo 非常细节，找到一个等待的接收器。我们将要发送的值直接传递给接收器，绕过通道缓冲区（如果有的话）。
+		// todo 非常细节，找到一个等待的接收器，将要发送的值直接传递给接收器，绕过通道缓冲区（如果有的话）。
 		send(c, sg, ep, func() { unlock(&c.lock) }, 3)
 		return true
 	}
 
 	// 3.2 缓冲管道，但没有接收者，且缓冲管道未满；即使非阻塞能写则写
 	if c.qcount < c.dataqsiz {
-		// Space is available in the channel buffer. Enqueue the element to send.
 		// 找到最新能够写入元素的位置
 		qp := chanbuf(c, c.sendx)
 		if raceenabled {
@@ -280,7 +226,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 		}
 		// 将要写入的元素的值拷贝到该处
 		typedmemmove(c.elemtype, qp, ep)
-		c.sendx++ // 写入的位置往后移
+		c.sendx++                  // 写入的位置往后移
 		if c.sendx == c.dataqsiz { // 如果等于数组长度，则跳转到首位（循环队列）
 			c.sendx = 0
 		}
@@ -289,17 +235,18 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 		return true
 	}
 
-	// todo 执行到此处，说明如果是无缓冲管道则没有接收者，是缓冲管道则已经满了，下方 block 为 true 下方 if 无法执行？
+	// 执行到此处，说明如果是无缓冲管道则没有接收者，是缓冲管道则已经满了
 	if !block {
+		// 不允许阻塞，直接返回 false
 		unlock(&c.lock)
 		return false
 	}
+	// 接下来让该 goroutine 阻塞等待
 
-	// Block on the channel. Some receiver will complete our operation for us.
 	// channel 满了，发送方会被阻塞。接下来会构造一个 sudog
 	// 获取当前发送数据的 goroutine
 	// 然后绑定到一个 sudog 结构体 (包装为运行时表示)
-	gp := getg()// 获取当前 goroutine 的指针
+	gp := getg()           // 获取当前 goroutine 的指针
 	mysg := acquireSudog() // 返回一个sudog
 	// 获取 sudog 结构体
 	// 并且设置相关字段 (包括当前的 channel，是否是 select 等)
@@ -695,9 +642,9 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	mysg.elem = ep // 设置接收数据的地址
 	mysg.waitlink = nil
 	gp.waiting = mysg
-	mysg.g = gp // 设置 goroutine
+	mysg.g = gp           // 设置 goroutine
 	mysg.isSelect = false // 设置是否 select
-	mysg.c = c // 设置当前的 channel
+	mysg.c = c            // 设置当前的 channel
 	gp.param = nil
 	c.recvq.enqueue(mysg) // 进入接收队列等待
 	// Signal to anyone trying to shrink our stack that we're about
