@@ -163,23 +163,6 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 		racereadpc(c.raceaddr(), callerpc, funcPC(chansend))
 	}
 
-	// Fast path: check for failed non-blocking operation without acquiring the lock.
-	//
-	// After observing that the channel is not closed, we observe that the channel is
-	// not ready for sending. Each of these observations is a single word-sized read
-	// (first c.closed and second full()).
-	// Because a closed channel cannot transition from 'ready for sending' to
-	// 'not ready for sending', even if the channel is closed between the two observations,
-	// they imply a moment between the two when the channel was both not yet closed
-	// and not ready for sending. We behave as if we observed the channel at that moment,
-	// and report that the send cannot proceed.
-	//
-	// It is okay if the reads are reordered here: if we observe that the channel is not
-	// ready for sending and then observe that it is not closed, that implies that the
-	// channel wasn't closed during the first observation. However, nothing here
-	// guarantees forward progress. We rely on the side effects of lock release in
-	// chanrecv() and closechan() to update this thread's view of c.closed and full().
-
 	// 快速路径：在不获取锁的情况下检查失败的非阻塞操作。
 	// 在观察到通道未关闭后，我们观察到通道尚未准备好发送。这些观察中的每一个都是单个字大小的读取（第一个c.closed和第二个full（））。
 	// 由于闭合通道无法从“准备发送”过渡到“未准备好发送”，因此即使通道在两个观测值之间关闭，它们也意味着当通道尚未关闭且尚未准备好发送时，两者之间存在一个时刻。
@@ -241,21 +224,17 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 		unlock(&c.lock)
 		return false
 	}
-	// 接下来让该 goroutine 阻塞等待
+	// channel 未关闭，且已满，没有接收者，goroutine允许被阻塞，接下来让该 goroutine 阻塞等待
 
-	// channel 满了，发送方会被阻塞。接下来会构造一个 sudog
-	// 获取当前发送数据的 goroutine
-	// 然后绑定到一个 sudog 结构体 (包装为运行时表示)
-	gp := getg()           // 获取当前 goroutine 的指针
-	mysg := acquireSudog() // 返回一个sudog
-	// 获取 sudog 结构体
-	// 并且设置相关字段 (包括当前的 channel，是否是 select 等)
+	// 获取当前发送数据的 goroutine，然后绑定到一个 sudog 结构体 (包装为运行时表示)
+	gp := getg()
+	mysg := acquireSudog()
+	// 获取 sudog 结构体，并且设置相关字段 (包括当前的 channel，是否是 select 等)
 	mysg.releasetime = 0
 	if t0 != 0 {
 		mysg.releasetime = -1
 	}
-	// No stack splits between assigning elem and enqueuing mysg
-	// on gp.waiting where copystack can find it.
+	// 在 gp.waiting 上分配 elem 和将 mysg 排队之间没有堆栈拆分，copystack 可以找到它。
 	mysg.elem = ep
 	mysg.waitlink = nil
 	mysg.g = gp
@@ -265,22 +244,13 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 	gp.param = nil
 	// 当前 goroutine 进入发送等待队列
 	c.sendq.enqueue(mysg)
-	// Signal to anyone trying to shrink our stack that we're about
-	// to park on a channel. The window between when this G's status
-	// changes and when we set gp.activeStackChans is not safe for
-	// stack shrinking.
+	// 向任何试图缩小我们的堆栈的人发出信号，表明我们将停在通道上。
+	// 从这个 G 的状态更改到我们设置 gp.activeStackChans 之间的窗口对于堆栈收缩是不安全的。
 	atomic.Store8(&gp.parkingOnChan, 1)
 	// 挂起当前 goroutine, 进入休眠 (等待接收)
 	gopark(chanparkcommit, unsafe.Pointer(&c.lock), waitReasonChanSend, traceEvGoBlockSend, 2)
-	// Ensure the value being sent is kept alive until the
-	// receiver copies it out. The sudog has a pointer to the
-	// stack object, but sudogs aren't considered as roots of the
-	// stack tracer.
-
 	// 确保发送的值保持活动状态，直到接收方将其复制出来。sudog 具有指向堆栈对象的指针，但 sudog 不被视为堆栈跟踪器的根。
 	KeepAlive(ep)
-
-	// someone woke us up.
 
 	// 从这里开始被唤醒了（channel 有机会可以发送了）
 	if mysg != gp.waiting {
@@ -288,7 +258,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 	}
 	gp.waiting = nil
 	gp.activeStackChans = false
-	closed := !mysg.success
+	closed := !mysg.success// 如果 goroutine 因为通过通道 c 传递了值而被唤醒，则为 true，如果因为 c 被关闭而唤醒，则为 false。
 	gp.param = nil
 	if mysg.releasetime > 0 {
 		blockevent(mysg.releasetime-t0, 2)
@@ -306,15 +276,8 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 	return true
 }
 
-// send processes a send operation on an empty channel c.
-// The value ep sent by the sender is copied to the receiver sg.
-// The receiver is then woken up to go on its merry way.
-// Channel c must be empty and locked.  send unlocks c with unlockf.
-// sg must already be dequeued from c.
-// ep must be non-nil and point to the heap or the caller's stack.
-// send 处理空通道 C 上的发送操作。发送方发送的值 ep 被复制到接收方 sg。
-// 然后接收器被唤醒，继续它的快乐之路。通道 c 必须为空并锁定。send 通过 unlockf 解锁 c。
-// SG 必须已从 C 中取消排队，EP 必须为非 nil 并指向堆或调用方的堆栈。
+// send 处理空通道 c 上的发送操作。发送方发送的值 ep 被复制到接收方 sg。然后接收器被唤醒。
+// 通道 c 必须为空并锁定。send 通过 unlockf 解锁 c。sg 必须已从 c 中取消排队，ep 必须为非 nil 并指向堆或调用方的堆栈。
 func send(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 	if raceenabled {
 		if c.dataqsiz == 0 {
@@ -847,6 +810,7 @@ func reflect_chanclose(c *hchan) {
 	closechan(c)
 }
 
+// 将 sudog 添加到协程的等待队列的尾部
 func (q *waitq) enqueue(sgp *sudog) {
 	sgp.next = nil
 	x := q.last
@@ -861,7 +825,7 @@ func (q *waitq) enqueue(sgp *sudog) {
 	q.last = sgp
 }
 
-// 从协程的等待队列中出列
+// 从协程的等待队列首部取出 sudog
 func (q *waitq) dequeue() *sudog {
 	for {
 		// 获取队列中的首个协程
@@ -881,20 +845,12 @@ func (q *waitq) dequeue() *sudog {
 			// 将下个赋给首位
 			q.first = y
 			// 将要出队的协程的后置指针置空，切断与其他协程的联系
-			sgp.next = nil // mark as removed (see dequeueSudog)
+			sgp.next = nil
 		}
 
-		// if a goroutine was put on this queue because of a
-		// select, there is a small window between the goroutine
-		// being woken up by a different case and it grabbing the
-		// channel locks. Once it has the lock
-		// it removes itself from the queue, so we won't see it after that.
-		// We use a flag in the G struct to tell us when someone
-		// else has won the race to signal this goroutine but the goroutine
-		// hasn't removed itself from the queue yet.
-		// 如果一个 goroutine 因为选择而被放到这个队列上，那么在被不同情况唤醒的 goroutine 和它抓取通道锁之间有一个小窗口。
+		// 如果一个 goroutine 因为 select 而被放到这个队列上，那么在被不同情况唤醒的 goroutine 和它抓取通道锁之间有一个小窗口。
 		// 一旦它有了锁，它就会将自己从队列中删除，所以之后我们不会看到它。
-		// 我们在 G 结构中使用一个标志来告诉我们其他人何时赢得了比赛来发出这个 goroutine 的信号，但 goroutine 还没有将自己从队列中删除。
+		// 我们在 G 结构中使用一个标志来发出这个 goroutine 的信号，其他人何时赢得了竞争但 goroutine 还没有将自己从队列中删除
 		if sgp.isSelect && !atomic.Cas(&sgp.g.selectDone, 0, 1) {
 			continue
 		}

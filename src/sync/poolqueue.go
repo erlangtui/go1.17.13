@@ -86,12 +86,12 @@ func (d *poolDequeue) pushHead(val interface{}) bool {
 	*(*interface{})(unsafe.Pointer(slot)) = val
 
 	// 增加 head，这会将插槽的所有权传递给 popTail，并充当写入插槽的存储屏障。
+	// 因为可能会与 popTail 有竞争，所以此处需要原子操作
 	atomic.AddUint64(&d.headTail, 1<<dequeueBits)
 	return true
 }
 
-// popHead 移除并返回队列首部的元素
-// 如果队列为空，则返回 false，必须由但生产者调用
+// popHead 移除并返回队列首部的元素，如果队列为空，则返回 false，必须由但生产者调用
 func (d *poolDequeue) popHead() (interface{}, bool) {
 	var slot *eface
 	for {
@@ -118,6 +118,7 @@ func (d *poolDequeue) popHead() (interface{}, bool) {
 	}
 	// 将插槽归零，避免在 pushHead 时发现不为 nil。
 	// 与 popTail 不同的是，这不是与 pushHead 竞争，所以我们在这里不需要小心。
+	// 因为头部只有单生产者操作，不可能同时读和写，所以此处没有竞争，不需要原子操作
 	*slot = eface{}
 	return val, true
 }
@@ -152,6 +153,7 @@ func (d *poolDequeue) popTail() (interface{}, bool) {
 	// 告诉pushHead，我们已经用完了这个插槽。将槽置零也很重要，这样我们就不会留下可能使该对象存活时间超过必要时间的引用。
 	// 我们首先写入 val，然后通过原子写入 typ 来发布我们已经完成了这个插槽。
 	slot.val = nil
+	// 可能有多个消费者从尾部取，所以需要原子操作
 	atomic.StorePointer(&slot.typ, nil)
 	// At this point pushHead owns the slot.
 

@@ -434,6 +434,12 @@ type g struct {
 	syscallsp uintptr // if status==Gsyscall, syscallsp = sched.sp to use during gc
 	syscallpc uintptr // if status==Gsyscall, syscallpc = sched.pc to use during gc
 	stktopsp  uintptr // expected sp at top of stack, to check in traceback
+	// param 是一个通用的指针参数字段，用于在特定上下文中传递值，在这些上下文中很难找到参数的其他存储。
+	// 它目前有三种使用方式：
+	// 1. 当通道操作唤醒一个被阻塞的 goroutine 时，它会设置 param 指向已完成的阻塞操作的 sudog。
+	// 2. 通过 gcAssistAlloc1 向其调用方发出信号，表明 goroutine 完成了 GC 循环。
+	// 	  以任何其他方式这样做都是不安全的，因为 goroutine 的堆栈可能在此期间已经移动。
+	// 3. 通过 debugCallWrap 将参数传递给新的 goroutine，因为禁止在运行时中分配闭包。
 	// param is a generic pointer parameter field used to pass
 	// values in particular contexts where other storage for the
 	// parameter would be difficult to find. It is currently used
