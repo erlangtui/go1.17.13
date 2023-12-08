@@ -687,6 +687,7 @@ func bulkBarrierBitmap(dst, src, size, maskOffset uintptr, bits *uint8) {
 	}
 }
 
+// typeBitsBulkBarrier对每个会被memmove使用类型位图来定位指针槽从[src, src+size)复制到[dst, dst+size)的指针执行写屏障。类型typ必须精确对应于[src, src+size)和[dst, dst+size)。Dst、src和size必须指针对齐。类型类型必须具有普通的位图，而不是GC程序。这个函数的唯一用途是在通道发送中，64 kB的通道元素限制为我们解决了这个问题。必须不能被抢占，因为它通常在memmove之前运行，并且GC必须将它们作为原子操作来观察。调用者必须执行cgo检查是否writeBarrier.cgo。
 // typeBitsBulkBarrier executes a write barrier for every
 // pointer that would be copied from [src, src+size) to [dst,
 // dst+size) by a memmove using the type bitmap to locate those

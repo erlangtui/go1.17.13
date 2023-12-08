@@ -61,11 +61,8 @@ const (
 		v int64
 	}{}.v)
 
-	// Possible tophash values. We reserve a few possibilities for special marks.
-	// Each bucket (including its overflow buckets, if any) will have either all or none of its
-	// entries in the evacuated* states (except during the evacuate() method, which only happens
-	// during map writes and thus no one else can observe the map during that time).
-
+	// 可能的tophash值。我们为特殊标记保留了一些可能性。每个桶(包括它的溢出桶，如果有的话)将在疏散状态中有全部或没有它的条目(除了在 evacuate() 方法期间，
+	// 这只发生在map写入期间，因此在此期间没有其他人可以观察到地图)。
 	// 可能的 tophash 值（顶部哈希值）
 	emptyRest      = 0 // 此单元格为空，并且在较高的索引或溢出处不再有非空单元格。
 	emptyOne       = 1 // 此单元格为空
@@ -113,7 +110,7 @@ type mapextra struct {
 	// overflow contains overflow buckets for hmap.buckets.
 	// oldoverflow contains overflow buckets for hmap.oldbuckets.
 	// The indirection allows to store a pointer to the slice in hiter.
-	//  内联存储：即 key 和 value 直接存储在哈希表的内存中，而不是存储在堆上
+	// 内联存储：即 key 和 value 直接存储在哈希表的内存中，而不是存储在堆上
 	// 但是，bmap.overflow 是一个指针。
 	// 为了使溢出桶保持活动状态，我们将指向所有溢出桶的指针存储在 hmap.extra.overflow 和 hmap.extra.oldoverflow 中。
 	// 仅当键和 elem 不包含指针时才使用溢出和旧溢出。Overflow 包含 hmap.buckets 的溢出存储桶。oldoverflow 包含 hmap.oldbuckets 的溢出存储桶。

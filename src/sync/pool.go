@@ -52,6 +52,7 @@ type poolLocalInternal struct {
 	shared  poolChain   // 当前 P 与其他 P 共有双向链表，链表中存储对象，当前 P 是生产者，能够 pushHead/popHead，其他 P 是消费者，只能 popTail.
 }
 
+// 是 poolLocalInternal 内存对齐之后的结构体
 type poolLocal struct {
 	poolLocalInternal
 
