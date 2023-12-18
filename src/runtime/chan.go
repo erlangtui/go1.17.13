@@ -673,7 +673,7 @@ func chanparkcommit(gp *g, chanLock unsafe.Pointer) bool {
 //	}
 //
 // select case 编译时，发送数据为非阻塞，即非阻塞型
-// todo must import, 没有default时，select case 编译成 chansend1(c *hchan, elem unsafe.Pointer)，即阻塞型
+// todo must important, 没有default时，select case 编译成 chansend1(c *hchan, elem unsafe.Pointer)，即阻塞型
 func selectnbsend(c *hchan, elem unsafe.Pointer) (selected bool) {
 	return chansend(c, elem, false, getcallerpc())
 }
