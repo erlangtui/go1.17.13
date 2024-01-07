@@ -248,7 +248,7 @@ func parentCancelCtx(parent Context) (*cancelCtx, bool) {
 	if !ok { // 判断是否为可以断言为可以取消的上下文
 		return nil, false
 	}
-	// 判断父子是否是同一个done
+	// 判断断言前后是否是同一个done
 	pdone, _ := p.done.Load().(chan struct{})
 	if pdone != done { // 判断可取消的上下文中的 done 值断言的管道
 		return nil, false
@@ -412,8 +412,7 @@ func WithDeadline(parent Context, d time.Time) (Context, CancelFunc) {
 // 它通过停止其计时器然后委托给 cancelCtx.cancel 来实现取消。
 type timerCtx struct {
 	cancelCtx
-	// timer 会在 deadline 到来时，自动取消 context。
-	timer    *time.Timer
+	timer    *time.Timer // timer 会在 deadline 到来时，自动取消 context
 	deadline time.Time
 }
 
@@ -432,7 +431,7 @@ func (c *timerCtx) String() string {
 func (c *timerCtx) cancel(removeFromParent bool, err error) {
 	c.cancelCtx.cancel(false, err) // 执行 cancelCtx 的取消函数
 	if removeFromParent {
-		// Remove this timerCtx from its parent cancelCtx's children.
+		// 从其父级 cancelCtx 的子级中删除此计时器
 		removeChild(c.cancelCtx.Context, c)
 	}
 	c.mu.Lock()
@@ -444,15 +443,6 @@ func (c *timerCtx) cancel(removeFromParent bool, err error) {
 }
 
 // WithTimeout returns WithDeadline(parent, time.Now().Add(timeout)).
-//
-// Canceling this context releases resources associated with it, so code should
-// call cancel as soon as the operations running in this Context complete:
-//
-// 	func slowOperationWithTimeout(ctx context.Context) (Result, error) {
-// 		ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-// 		defer cancel()  // releases resources if slowOperation completes before timeout elapses
-// 		return slowOperation(ctx)
-// 	}
 func WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc) {
 	return WithDeadline(parent, time.Now().Add(timeout))
 }

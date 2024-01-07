@@ -123,8 +123,7 @@ func (d *poolDequeue) popHead() (interface{}, bool) {
 	return val, true
 }
 
-// popTail 移除并返回队列尾部的元素
-// 如果队列为空，则返回 false，可以被任意数量的消费者调用
+// popTail 移除并返回队列尾部的元素，如果队列为空，则返回 false，可以被任意数量的消费者调用
 func (d *poolDequeue) popTail() (interface{}, bool) {
 	var slot *eface
 	for {
@@ -155,23 +154,18 @@ func (d *poolDequeue) popTail() (interface{}, bool) {
 	slot.val = nil
 	// 可能有多个消费者从尾部取，所以需要原子操作
 	atomic.StorePointer(&slot.typ, nil)
-	// At this point pushHead owns the slot.
 
 	return val, true
 }
 
-// poolChain 是 poolDequeue 动态长度的版本
-// 这是作为 poolDequeues 的双向链表队列实现的，其中每个队列的大小是前一个队列的两倍。
-// 一旦排队填满，就会分配一个新的，并且只会推送到最新的排队。
-// 弹出发生在列表的另一端，一旦排队用尽，它就会从列表中删除。
+//* poolChain 是一个动态长度的链表，其节点是 poolChainElt，其中 head 元素指向链表的最新节点，tail 元素指向链表的最老节点；
+//* head 指向的是最新创建的节点，也是最大的队列，从头部读写元素时，即是从 head 指向的 poolChainElt 节点中的 poolDequeue 队列的头部进行读写，这只能由生产者访问，不需要同步；
+//* tail 指向的是最早创建的节点，也是最小的队列，从尾部读元素时，即是从 tail 指向的 poolChainElt 节点中的 poolDequeue 队列的进行读，这可以由多个消费者访问，需要进行同步；
+//* 当从头部写元素时，当 head 指向的 poolChainElt 节点中的 poolDequeue 环形队列中满了时，会重新创建一个新的节点，该节点中的环形队列的长度是当前 head 中环形队列长度的两倍，并将该节点加入到链表中，更新 head 指向该最新节点，继续往该节点写入；
+//* 当从尾部读元素时，当 tail 指向的 poolChainElt 节点中的 poolDequeue 环形队列中空了时，会从该链表中删除该节点，并更新 tail 指向其下一个节点；
 type poolChain struct {
-	// head 是要从头部推入的 poolDequeue。这只能由生产者访问，因此不需要同步。所以 head 指向的是最新创建的队列，也是最大的队列。
 	head *poolChainElt
-	// tail 是要从尾部弹出的 poolDequeue。它由消费者访问，因此读取和写入必须是原子的。tail 指向的是最早创建的队列，也就是最小的队列。
 	tail *poolChainElt
-
-	// P1 作为生产者从 P1 的头部开始读，其他 P 作为消费者，从 P1 的尾部开始读，他们与 P1 之间不会产生竞争，但是他们之间会有竞争
-	// 故头部读不用原子操作，尾部读需要用原子操作
 }
 
 // poolChainElt 是一个双向链表，只是链表的每个元素都是一个环形队列 poolDequeue，每个 poolDequeue 队列的长度都是 2 幂，并且是前一个队列长度的两倍
@@ -211,7 +205,6 @@ func (c *poolChain) pushHead(val interface{}) {
 	// 当前队列已满，新分配的队列长度是当前的两倍
 	newSize := len(d.vals) * 2
 	if newSize >= dequeueLimit {
-		// Can't make it any bigger.
 		newSize = dequeueLimit
 	}
 
@@ -229,7 +222,7 @@ func (c *poolChain) popHead() (interface{}, bool) {
 		if val, ok := d.popHead(); ok {
 			return val, ok
 		}
-		// 获取前一个队列，尝试从前面的队列中弹出，只有消费者读头部，不会有竞争
+		// 从 head 往 tail 的过程中加载 poolChainElt 节点，虽然只有一个生产者，但是可能会与其他消费者从 tail 往 head 的过程中加载到同一个节点，所以此处需要原子操作
 		d = loadPoolChainElt(&d.prev)
 	}
 	return nil, false
@@ -245,6 +238,7 @@ func (c *poolChain) popTail() (interface{}, bool) {
 	for {
 		// 在弹出尾部之前加载 next 指针是很重要的。
 		// 一般来说，d 可能暂时为空，但如果 next 在弹出操作之前为非空，并且弹出操作失败，则 d 永久为空，这是将 d 从链中删除的唯一安全条件。
+		// 从 tail 往 head 的过程中加载 poolChainElt 节点，可能会有多个消费者或某个生产者同时加载到同一个节点，所以此处需要原子操作
 		d2 := loadPoolChainElt(&d.next)
 
 		if val, ok := d.popTail(); ok {
