@@ -271,8 +271,9 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 	return true
 }
 
-// send 处理空通道 c 上的发送操作。发送方发送的值 ep 被复制到接收方 sg。然后接收器被唤醒。
-// 通道 c 必须为空并锁定。send 通过 unlockf 解锁 c。sg 必须已从 c 中取消排队，ep 必须为非 nil 并指向堆或调用方的堆栈。
+// send 处理空通道 c 上的写入操作，生产者 goroutine 上待写入的值 ep 被复制到消费者 sg，然后该消费者被唤醒
+// 通道 c 必须为空并锁定（此时才能直接在生产者和消费者两个 goroutine 之间拷贝数据）
+// send 通过 unlockf 解锁 c，sg 必须已从 c 的消费者队列中出队，ep 必须为非 nil 并指向堆或调用方的堆栈
 func send(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 	if raceenabled {
 		if c.dataqsiz == 0 {
@@ -305,8 +306,7 @@ func send(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 	}
 	// 唤醒接收的 goroutine. skip 和打印栈相关
 	// 调用 goready 函数将接收方 goroutine 唤醒并标记为可运行状态
-	// 并把其放入发送方所在处理器 P 的 runnext 字段等待执行
-	// runnext 字段表示最高优先级的 goroutine
+	// 并把其放入发送方所在处理器 P 的 runnext 字段等待执行，runnext 字段表示最高优先级的 goroutine
 	goready(gp, skip+1)
 }
 
@@ -408,7 +408,7 @@ func closechan(c *hchan) {
 		glist.push(gp) // 将 sg 对应的 goroutine 添加到 glist 列表
 	}
 
-	unlock(&c.lock)// 解锁
+	unlock(&c.lock) // 解锁
 
 	// 准备好所有 G，现在我们已经删除了通道锁。
 	for !glist.empty() {
@@ -462,7 +462,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 
 	if c == nil {
 		if !block {
-			return// channel 为 nil，非阻塞模式下直接返回
+			return // channel 为 nil，非阻塞模式下直接返回
 		}
 		// 阻塞模式下，调用 gopark 将当前 goroutine休眠，调用 gopark 时候，将传入 unlockf 设置为 nil，当前 goroutine 会一直休眠
 		gopark(nil, nil, waitReasonChanReceiveNilChan, traceEvGoStop, 2)
@@ -486,7 +486,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 				raceacquire(c.raceaddr())
 			}
 			if ep != nil {
-				typedmemclr(c.elemtype, ep)// 没有任何等待接收的数据，清理 ep 指针中的数据
+				typedmemclr(c.elemtype, ep) // 没有任何等待接收的数据，清理 ep 指针中的数据
 			}
 			return true, false
 		}
@@ -557,7 +557,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	// 没有等待的发送者协程，缓冲区没有数据，且阻塞的
 	// 获取当前接收的协程 goroutine，然后绑定到一个 sudog 结构体 (包装为运行时表示)
 	gp := getg()
-	mysg := acquireSudog()// 获取 sudog 结构体，并设置相关参数
+	mysg := acquireSudog() // 获取 sudog 结构体，并设置相关参数
 	mysg.releasetime = 0
 	if t0 != 0 {
 		mysg.releasetime = -1
@@ -588,8 +588,8 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	// todo 被唤醒的原因，true，因为写入了数据，false，因为关闭了管道
 	success := mysg.success
 	gp.param = nil
-	mysg.c = nil// 取消 sudog 和 channel 绑定关系
-	releaseSudog(mysg)// 释放 sudog
+	mysg.c = nil       // 取消 sudog 和 channel 绑定关系
+	releaseSudog(mysg) // 释放 sudog
 	return true, success
 }
 
@@ -608,7 +608,7 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 			racesync(c, sg)
 		}
 		if ep != nil {
-			recvDirect(c.elemtype, sg, ep)// 直接从发送者 goroutine 将数据拷贝到接收者 goroutine 的 ep 上
+			recvDirect(c.elemtype, sg, ep) // 直接从发送者 goroutine 将数据拷贝到接收者 goroutine 的 ep 上
 		}
 	} else {
 		// 缓冲区已满，从消费索引处获取数据的指针
@@ -625,18 +625,18 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 		// 因为缓冲区已经满了，所以生产索引和消费索引是同一个位置，直接将发送者协程的数据拷贝到消费索引处
 		typedmemmove(c.elemtype, qp, sg.elem)
 
-		c.recvx++// 消费索引加一
+		c.recvx++ // 消费索引加一
 		if c.recvx == c.dataqsiz {
 			c.recvx = 0
 		}
 		// 缓冲区是满的，两者相等，元素数量不变
 		c.sendx = c.recvx // c.sendx = (c.sendx+1) % c.dataqsiz
 	}
-	sg.elem = nil// 发送者协程的数据指针置空
+	sg.elem = nil // 发送者协程的数据指针置空
 	gp := sg.g
-	unlockf()// 解锁
+	unlockf() // 解锁
 	gp.param = unsafe.Pointer(sg)
-	sg.success = true// 因为写入值成功而被唤醒
+	sg.success = true // 因为写入值成功而被唤醒
 	if sg.releasetime != 0 {
 		sg.releasetime = cputicks()
 	}

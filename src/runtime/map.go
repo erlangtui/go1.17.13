@@ -91,117 +91,38 @@ type hmap struct {
 	count      int            // map 元素个数，必须在第一位，由内置函数 len() 调用
 	flags      uint8          // 标志
 	B          uint8          // 桶的数量的对数值，桶数：2^B
-	noverflow  uint16         // 溢出桶的大概数量 see incrnoverflow for details
+	noverflow  uint16         // 溢出桶的大概数量，为了保持hmap较小，noverflow 是一个uint16。
 	hash0      uint32         // 哈希种子
 	buckets    unsafe.Pointer // 指向桶的指针，多个桶在内存上是连续的，当 count 为 0 时，为 nil
 	oldbuckets unsafe.Pointer // 在扩容时，指向旧桶的指针，仅在扩容时不为空
-	nevacuate  uintptr        // 疏散进度计数器（小于此值的桶已清空） progress counter for evacuation (buckets less than this have been evacuated)
+	nevacuate  uintptr        // 疏散进度计数器（小于此值的桶已清空）
 
 	extra *mapextra // 额外字段
 }
 
 // mapextra 保存并非所有 map 都存在的字段
 type mapextra struct {
-	// If both key and elem do not contain pointers and are inline, then we mark bucket
-	// type as containing no pointers. This avoids scanning such maps.
-	// However, bmap.overflow is a pointer. In order to keep overflow buckets
-	// alive, we store pointers to all overflow buckets in hmap.extra.overflow and hmap.extra.oldoverflow.
-	// overflow and oldoverflow are only used if key and elem do not contain pointers.
-	// overflow contains overflow buckets for hmap.buckets.
-	// oldoverflow contains overflow buckets for hmap.oldbuckets.
-	// The indirection allows to store a pointer to the slice in hiter.
 	// 内联存储：即 key 和 value 直接存储在哈希表的内存中，而不是存储在堆上
-	// 但是，bmap.overflow 是一个指针。
-	// 为了使溢出桶保持活动状态，我们将指向所有溢出桶的指针存储在 hmap.extra.overflow 和 hmap.extra.oldoverflow 中。
-	// 仅当键和 elem 不包含指针时才使用溢出和旧溢出。Overflow 包含 hmap.buckets 的溢出存储桶。oldoverflow 包含 hmap.oldbuckets 的溢出存储桶。
+	// 为了使溢出桶保持活动状态，将指向所有溢出桶的指针存储在 hmap.extra.overflow 和 hmap.extra.oldoverflow 中。
+	// 仅当键和 elem 不包含指针时才使用 overflow 和 oldoverflow，overflow 包含 hmap.buckets 的溢出存储桶，oldoverflow 包含 hmap.oldbuckets 的溢出存储桶。
 	// 间接寻址允许在命中器中存储指向切片的指针。
 
 	// 如果 key 和 elem 都不包含指针并且是内联的，那么我们将存储桶类型标记为不包含指针。这样可以避免gc扫描此类map。
-	overflow    *[]*bmap // 存储所有溢出桶的指针所在数组的地址
-	oldoverflow *[]*bmap // 扩容时，存储旧的所有溢出桶的指针所在数组的地址
-
-	nextOverflow *bmap // 持有指向可用溢出存储桶的指针
+	overflow     *[]*bmap // 存储所有溢出桶的指针所在数组的地址
+	oldoverflow  *[]*bmap // 扩容时，存储旧的所有溢出桶的指针所在数组的地址
+	nextOverflow *bmap    // 持有指向可用溢出存储桶的指针
 }
 
-// Go map 的桶
-type bmap struct {
-	// tophash 通常包含此存储桶中每个键的哈希值的顶部字节。如果 tophash[0] < minTopHash，则 tophash[0] 是存储桶疏散状态。
-	tophash [bucketCnt]uint8
-	// 将所有的键连续存储在一起，将所有的值连续存储在一起，能够避免 键值/键值 存取方式的内存对齐
-}
-
-// 哈希迭代结构。如果修改 hiter，还要更改 cmdcompileinternalreflectdatareflect.go 以指示此结构的布局。
-type hiter struct {
-	key         unsafe.Pointer // Must be in first position.  Write nil to indicate iteration end (see cmd/compile/internal/walk/range.go).
-	elem        unsafe.Pointer // Must be in second position (see cmd/compile/internal/walk/range.go).
-	t           *maptype
-	h           *hmap
-	buckets     unsafe.Pointer // bucket ptr at hash_iter initialization time
-	bptr        *bmap          // current bucket
-	overflow    *[]*bmap       // keeps overflow buckets of hmap.buckets alive
-	oldoverflow *[]*bmap       // keeps overflow buckets of hmap.oldbuckets alive
-	startBucket uintptr        // bucket iteration started at
-	offset      uint8          // intra-bucket offset to start from during iteration (should be big enough to hold bucketCnt-1)
-	wrapped     bool           // already wrapped around from end of bucket array to beginning
-	B           uint8
-	i           uint8
-	bucket      uintptr
-	checkBucket uintptr
-}
-
-// bucketShift 返回 1<<b，针对代码生成进行了优化。
-func bucketShift(b uint8) uintptr {
-	// Masking the shift amount allows overflow checks to be elided.
-	return uintptr(1) << (b & (sys.PtrSize*8 - 1))
-}
-
-// bucketMask returns 1<<b - 1, optimized for code generation.
-func bucketMask(b uint8) uintptr {
-	return bucketShift(b) - 1
-}
-
-// tophash 计算 hash 的顶部哈希值
-func tophash(hash uintptr) uint8 {
-	top := uint8(hash >> (sys.PtrSize*8 - 8))
-	if top < minTopHash {
-		top += minTopHash
-	}
-	return top
-}
-
-// 是否疏散完成
-func evacuated(b *bmap) bool {
-	h := b.tophash[0]
-	return h > emptyOne && h < minTopHash
-}
-
-// 获取溢出桶
-func (b *bmap) overflow(t *maptype) *bmap {
-	return *(**bmap)(add(unsafe.Pointer(b), uintptr(t.bucketsize)-sys.PtrSize))
-}
-
-// 设置溢出桶
-func (b *bmap) setoverflow(t *maptype, ovf *bmap) {
-	*(**bmap)(add(unsafe.Pointer(b), uintptr(t.bucketsize)-sys.PtrSize)) = ovf
-}
-
-// 获取 keys 的地址
-func (b *bmap) keys() unsafe.Pointer {
-	return add(unsafe.Pointer(b), dataOffset)
-}
-
-// incrnoverflow 递增 H.noverflow，计算溢出存储桶的数量。这用于触发相同大小的 map 扩容。另请参阅ManyOverflowBuckets。
-// 为了保持hmap小，noverflow 是一个uint16。当桶很少时，noverflow 是一个精确的计数。当有许多存储桶时，noverflow 是一个近似计数。
+// incrnoverflow 递增溢出存储桶的计数，当存储桶很少时，递增操作直接执行，noverflow 是一个精确的计数；当存储桶很多时，递增操作以一定的概率执行，noverflow 是一个近似计数
 func (h *hmap) incrnoverflow() {
-	// 如果溢出存储桶与存储桶一样多，我们将触发相同大小的 map 扩容。我们需要能够数到1<<h.B。
+	// 如果溢出存储桶与存储桶一样多，将触发相同大小的 map 扩容
 	if h.B < 16 {
 		h.noverflow++
 		return
 	}
 	// 当存储桶的数量达到 1<<15-1 时，溢出桶的数量大概等于存储桶，以 1/(1<<(h.B-15)) 的概率增加溢出桶
 	mask := uint32(1)<<(h.B-15) - 1
-	// Example: if h.B == 18, then mask == 7,
-	// and fastrand & 7 == 0 with probability 1/8.
+	// Example: if h.B == 18, then mask == 7, and fastrand & 7 == 0 概率为 1/8.
 	if fastrand()&mask == 0 {
 		h.noverflow++
 	}
@@ -244,6 +165,97 @@ func (h *hmap) createOverflow() {
 	}
 }
 
+// growing reports whether h is growing. The growth may be to the same size or bigger.
+func (h *hmap) growing() bool {
+	return h.oldbuckets != nil
+}
+
+// sameSizeGrow reports whether the current growth is to a map of the same size.
+func (h *hmap) sameSizeGrow() bool {
+	return h.flags&sameSizeGrow != 0
+}
+
+// noldbuckets calculates the number of buckets prior to the current map growth.
+func (h *hmap) noldbuckets() uintptr {
+	oldB := h.B
+	if !h.sameSizeGrow() {
+		oldB--
+	}
+	return bucketShift(oldB)
+}
+
+// oldbucketmask provides a mask that can be applied to calculate n % noldbuckets().
+func (h *hmap) oldbucketmask() uintptr {
+	return h.noldbuckets() - 1
+}
+
+// Go map 的桶
+type bmap struct {
+	// tophash 通常包含此存储桶中每个键的哈希值的顶部字节，如果 tophash[0] < minTopHash，则 tophash[0] 是存储桶疏散状态。
+	tophash [bucketCnt]uint8
+	// 将所有的键连续存储在一起，将所有的值连续存储在一起，能够避免 键值/键值 存取方式的内存对齐
+}
+
+// 获取溢出桶
+func (b *bmap) overflow(t *maptype) *bmap {
+	return *(**bmap)(add(unsafe.Pointer(b), uintptr(t.bucketsize)-sys.PtrSize))
+}
+
+// 设置溢出桶
+func (b *bmap) setoverflow(t *maptype, ovf *bmap) {
+	*(**bmap)(add(unsafe.Pointer(b), uintptr(t.bucketsize)-sys.PtrSize)) = ovf
+}
+
+// 获取 keys 的地址
+func (b *bmap) keys() unsafe.Pointer {
+	return add(unsafe.Pointer(b), dataOffset)
+}
+
+// 是否疏散中
+func evacuated(b *bmap) bool {
+	h := b.tophash[0]
+	return h > emptyOne && h < minTopHash
+}
+
+// 哈希迭代结构。如果修改 hiter，还要更改 cmdcompileinternalreflectdatareflect.go 以指示此结构的布局。
+type hiter struct {
+	key         unsafe.Pointer // Must be in first position.  Write nil to indicate iteration end (see cmd/compile/internal/walk/range.go).
+	elem        unsafe.Pointer // Must be in second position (see cmd/compile/internal/walk/range.go).
+	t           *maptype
+	h           *hmap
+	buckets     unsafe.Pointer // bucket ptr at hash_iter initialization time
+	bptr        *bmap          // current bucket
+	overflow    *[]*bmap       // keeps overflow buckets of hmap.buckets alive
+	oldoverflow *[]*bmap       // keeps overflow buckets of hmap.oldbuckets alive
+	startBucket uintptr        // bucket iteration started at
+	offset      uint8          // intra-bucket offset to start from during iteration (should be big enough to hold bucketCnt-1)
+	wrapped     bool           // already wrapped around from end of bucket array to beginning
+	B           uint8
+	i           uint8
+	bucket      uintptr
+	checkBucket uintptr
+}
+
+// bucketShift 返回 1<<b，针对代码生成进行了优化
+func bucketShift(b uint8) uintptr {
+	// Masking the shift amount allows overflow checks to be elided.
+	return uintptr(1) << (b & (sys.PtrSize*8 - 1))
+}
+
+// bucketMask returns 1<<b - 1, 针对代码生成进行了优化
+func bucketMask(b uint8) uintptr {
+	return bucketShift(b) - 1
+}
+
+// tophash 计算 hash 的顶部哈希值
+func tophash(hash uintptr) uint8 {
+	top := uint8(hash >> (sys.PtrSize*8 - 8))
+	if top < minTopHash {
+		top += minTopHash
+	}
+	return top
+}
+
 func makemap64(t *maptype, hint int64, h *hmap) *hmap {
 	if int64(int(hint)) != hint {
 		hint = 0
@@ -265,28 +277,26 @@ func makemap_small() *hmap {
 // 如果 h 非空，则能够直接在 h 上创建 map
 // 如果 h.buckets 非空，则指向的 bucket 可以用作第一个存储桶
 func makemap(t *maptype, hint int, h *hmap) *hmap {
+	// 计算需要申请的内存大小，并进行校验
 	mem, overflow := math.MulUintptr(uintptr(hint), t.bucket.size)
 	if overflow || mem > maxAlloc {
 		hint = 0
 	}
 
-	// initialize Hmap
+	// 初始化 hmap
 	if h == nil {
 		h = new(hmap)
 	}
 	h.hash0 = fastrand()
 
-	// Find the size parameter B which will hold the requested # of elements.
-	// For hint < 0 overLoadFactor returns false since hint < bucketCnt.
+	// 确定 B 的值，以保证 1<<B 个桶能够装下 hint 个元素，且负载因子在约定范围内
 	B := uint8(0)
 	for overLoadFactor(hint, B) {
-		B++
+		B++ // 桶的数量翻倍
 	}
 	h.B = B
 
-	// allocate initial hash table
-	// if B == 0, the buckets field is allocated lazily later (in mapassign)
-	// If hint is large zeroing this memory could take a while.
+	// 分配哈希表，如果 B == 0，则稍后会延迟分配 buckets 字段（在 mapassign 中） 如果 hint 很大，则将此内存归零可能需要一段时间
 	if h.B != 0 {
 		var nextOverflow *bmap
 		h.buckets, nextOverflow = makeBucketArray(t, h.B, nil)
@@ -299,53 +309,46 @@ func makemap(t *maptype, hint int, h *hmap) *hmap {
 	return h
 }
 
-// makeBucketArray initializes a backing array for map buckets.
-// 1<<b is the minimum number of buckets to allocate.
-// dirtyalloc should either be nil or a bucket array previously
-// allocated by makeBucketArray with the same t and b parameters.
-// If dirtyalloc is nil a new backing array will be alloced and
-// otherwise dirtyalloc will be cleared and reused as backing array.
+// makeBucketArray 用于创建一个存储桶数组，并返回该数组以及下一个溢出桶的指针
+// 1<<b 是需要分配桶的最小数量
+// dirtyalloc 应该是 nil 或指向之前由 makeBucketArray 以相同 t 和 b 参数分配的存储桶数组
+// 如果 dirtyalloc 是 nil 则会分配一个新的底层数组，否则 dirtyalloc 指向的数组将会被清理掉并被重新被复用为底层数组
 func makeBucketArray(t *maptype, b uint8, dirtyalloc unsafe.Pointer) (buckets unsafe.Pointer, nextOverflow *bmap) {
 	base := bucketShift(b)
 	nbuckets := base
-	// For small b, overflow buckets are unlikely.
-	// Avoid the overhead of the calculation.
-	if b >= 4 {
-		// Add on the estimated number of overflow buckets
-		// required to insert the median number of elements
-		// used with this value of b.
+
+	if b >= 4 { // 对于小 b，溢出桶的可能性不大，添加次条件能够避免计算的开销
 		nbuckets += bucketShift(b - 4)
-		sz := t.bucket.size * nbuckets
-		up := roundupsize(sz)
-		if up != sz {
+		sz := t.bucket.size * nbuckets // nbuckets 个桶所需的内存大小
+		up := roundupsize(sz)          // 将其对齐到最近的较大的2的幂次方数值
+		if up != sz {                  // 如果对齐后的值与原始值不相等，则用对齐后的内存大小计算实际的桶数 nbuckets
 			nbuckets = up / t.bucket.size
 		}
 	}
 
 	if dirtyalloc == nil {
+		// 直接分配一个新的底层数组
 		buckets = newarray(t.bucket, int(nbuckets))
 	} else {
-		// dirtyalloc was previously generated by
-		// the above newarray(t.bucket, int(nbuckets))
-		// but may not be empty.
+		// 复用 dirtyalloc 指向的原数组，并将该数组内存清空
 		buckets = dirtyalloc
 		size := t.bucket.size * nbuckets
 		if t.bucket.ptrdata != 0 {
+			// 桶中的元素类型带有指针时，数组内存的清空方式
 			memclrHasPointers(buckets, size)
 		} else {
+			// 桶中的元素类型没有指针时，数组内存的清空方式
 			memclrNoHeapPointers(buckets, size)
 		}
 	}
 
 	if base != nbuckets {
-		// We preallocated some overflow buckets.
-		// To keep the overhead of tracking these overflow buckets to a minimum,
-		// we use the convention that if a preallocated overflow bucket's overflow
-		// pointer is nil, then there are more available by bumping the pointer.
-		// We need a safe non-nil pointer for the last overflow bucket; just use buckets.
-		nextOverflow = (*bmap)(add(buckets, base*uintptr(t.bucketsize)))
-		last := (*bmap)(add(buckets, (nbuckets-1)*uintptr(t.bucketsize)))
-		last.setoverflow(t, (*bmap)(buckets))
+		// 我们预先分配了一些溢出桶。为了将跟踪这些溢出桶的开销降至最低，我们使用这样的约定:
+		// 如果预分配的溢出桶的溢出指针为nil，则通过碰撞指针可以获得更多可用的溢出桶。
+		// 对于最后一个溢出桶，我们需要一个安全的非空指针;就用 buckets 吧。
+		nextOverflow = (*bmap)(add(buckets, base*uintptr(t.bucketsize)))  // 通过调用add函数计算出下一个溢出桶的地址，并将其转换为*bmap类型的指针
+		last := (*bmap)(add(buckets, (nbuckets-1)*uintptr(t.bucketsize))) // 通过调用add函数计算出最后一个溢出桶的地址，并将其转换为*bmap类型的指针
+		last.setoverflow(t, (*bmap)(buckets))                             // 调用last.setoverflow方法，将 buckets 强制转换为*bmap类型的指针，并设置为最后一个溢出桶的溢出指针
 	}
 	return buckets, nextOverflow
 }
@@ -1030,7 +1033,7 @@ func hashGrow(t *maptype, h *hmap) {
 	// by growWork() and evacuate().
 }
 
-// overLoadFactor 放置在 1<<B 个存储桶中的项目数量是否超过负载因子。
+// overLoadFactor 判断 count 元素放置在 1<<B 个存储桶中是否超过负载因子
 func overLoadFactor(count int, B uint8) bool {
 	return count > bucketCnt && uintptr(count) > loadFactorNum*(bucketShift(B)/loadFactorDen)
 }
@@ -1048,30 +1051,6 @@ func tooManyOverflowBuckets(noverflow uint16, B uint8) bool {
 	}
 	// The compiler doesn't see here that B < 16; mask B to generate shorter shift code.
 	return noverflow >= uint16(1)<<(B&15)
-}
-
-// growing reports whether h is growing. The growth may be to the same size or bigger.
-func (h *hmap) growing() bool {
-	return h.oldbuckets != nil
-}
-
-// sameSizeGrow reports whether the current growth is to a map of the same size.
-func (h *hmap) sameSizeGrow() bool {
-	return h.flags&sameSizeGrow != 0
-}
-
-// noldbuckets calculates the number of buckets prior to the current map growth.
-func (h *hmap) noldbuckets() uintptr {
-	oldB := h.B
-	if !h.sameSizeGrow() {
-		oldB--
-	}
-	return bucketShift(oldB)
-}
-
-// oldbucketmask provides a mask that can be applied to calculate n % noldbuckets().
-func (h *hmap) oldbucketmask() uintptr {
-	return h.noldbuckets() - 1
 }
 
 func growWork(t *maptype, h *hmap, bucket uintptr) {

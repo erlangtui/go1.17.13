@@ -323,12 +323,9 @@ func reflect_typedmemclrpartial(typ *_type, ptr unsafe.Pointer, off, size uintpt
 	memclrNoHeapPointers(ptr, size)
 }
 
-// memclrHasPointers clears n bytes of typed memory starting at ptr.
-// The caller must ensure that the type of the object at ptr has
-// pointers, usually by checking typ.ptrdata. However, ptr
-// does not have to point to the start of the allocation.
-//
 //go:nosplit
+// memclrHasPointers 从 ptr 开始清除 n 个字节的类型化内存。
+// 调用方必须确保 ptr 处的对象类型具有指针，通常通过检查 typ.ptrdata。但是，ptr 不必指向分配的开始。
 func memclrHasPointers(ptr unsafe.Pointer, n uintptr) {
 	bulkBarrierPreWrite(uintptr(ptr), 0, n)
 	memclrNoHeapPointers(ptr, n)
