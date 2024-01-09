@@ -107,9 +107,9 @@ type mapextra struct {
 	// 仅当键和 elem 不包含指针时才使用 overflow 和 oldoverflow，overflow 包含 hmap.buckets 的溢出存储桶，oldoverflow 包含 hmap.oldbuckets 的溢出存储桶。
 	// 间接寻址允许在命中器中存储指向切片的指针。
 
-	// 如果 key 和 elem 都不包含指针并且是内联的，那么我们将存储桶类型标记为不包含指针。这样可以避免gc扫描此类map。
-	overflow     *[]*bmap // 存储所有溢出桶的指针所在数组的地址
-	oldoverflow  *[]*bmap // 扩容时，存储旧的所有溢出桶的指针所在数组的地址
+	// 如果 key 和 elem 都不包含指针并且是内联的，那么我们将存储桶类型标记为不包含指针。这样可以避免gc扫描此类map
+	overflow     *[]*bmap // 溢出桶数组，存储所有溢出桶的指针
+	oldoverflow  *[]*bmap // 扩容时，存储旧的所有溢出桶的指针
 	nextOverflow *bmap    // 持有指向可用溢出存储桶的指针
 }
 
@@ -128,14 +128,15 @@ func (h *hmap) incrnoverflow() {
 	}
 }
 
+// 创建溢出桶对象
 func (h *hmap) newoverflow(t *maptype, b *bmap) *bmap {
 	var ovf *bmap
 	if h.extra != nil && h.extra.nextOverflow != nil {
-		// We have preallocated overflow buckets available.
-		// See makeBucketArray for more details.
+		// 已经在 makeBucketArray 函数中预分配了溢出桶对象，直接使用
 		ovf = h.extra.nextOverflow
 		if ovf.overflow(t) == nil {
 			// We're not at the end of the preallocated overflow buckets. Bump the pointer.
+			// 我们还没有到达预分配的溢出存储桶的末尾。碰一下指针。
 			h.extra.nextOverflow = (*bmap)(add(unsafe.Pointer(ovf), uintptr(t.bucketsize)))
 		} else {
 			// This is the last preallocated overflow bucket.
@@ -156,6 +157,7 @@ func (h *hmap) newoverflow(t *maptype, b *bmap) *bmap {
 	return ovf
 }
 
+// 创建溢出桶数组
 func (h *hmap) createOverflow() {
 	if h.extra == nil {
 		h.extra = new(mapextra)
@@ -165,12 +167,12 @@ func (h *hmap) createOverflow() {
 	}
 }
 
-// growing reports whether h is growing. The growth may be to the same size or bigger.
+// growing 是否正在扩容，向同尺寸的或更大尺寸的 map 扩容
 func (h *hmap) growing() bool {
 	return h.oldbuckets != nil
 }
 
-// sameSizeGrow reports whether the current growth is to a map of the same size.
+// sameSizeGrow 当前扩容是否是向同尺寸的 map 扩容
 func (h *hmap) sameSizeGrow() bool {
 	return h.flags&sameSizeGrow != 0
 }
@@ -196,12 +198,20 @@ type bmap struct {
 	// 将所有的键连续存储在一起，将所有的值连续存储在一起，能够避免 键值/键值 存取方式的内存对齐
 }
 
-// 获取溢出桶
+// type bmap struct {
+// 	topbits  [8]uint8
+// 	keys     [8]keytype
+// 	values   [8]valuetype
+// 	pad      uintptr
+// 	overflow uintptr
+// }
+
+// 获取当前存储桶的溢出桶指针
 func (b *bmap) overflow(t *maptype) *bmap {
 	return *(**bmap)(add(unsafe.Pointer(b), uintptr(t.bucketsize)-sys.PtrSize))
 }
 
-// 设置溢出桶
+// 将 ovf 存储到当前存储桶的溢出桶指针上
 func (b *bmap) setoverflow(t *maptype, ovf *bmap) {
 	*(**bmap)(add(unsafe.Pointer(b), uintptr(t.bucketsize)-sys.PtrSize)) = ovf
 }
@@ -256,6 +266,13 @@ func tophash(hash uintptr) uint8 {
 	return top
 }
 
+// makemap_small 为 make(map[k]v)  和 make(map[k]v, hint) 实现 Go map 创建，前提是在编译时已知 hint 最多为 bucketCnt，并且需要在堆上分配映射。
+func makemap_small() *hmap {
+	h := new(hmap)
+	h.hash0 = fastrand()
+	return h
+}
+
 func makemap64(t *maptype, hint int64, h *hmap) *hmap {
 	if int64(int(hint)) != hint {
 		hint = 0
@@ -263,19 +280,8 @@ func makemap64(t *maptype, hint int64, h *hmap) *hmap {
 	return makemap(t, int(hint), h)
 }
 
-// makemap_small implements Go map creation for make(map[k]v) and
-// make(map[k]v, hint) when hint is known to be at most bucketCnt
-// at compile time and the map needs to be allocated on the heap.
-func makemap_small() *hmap {
-	h := new(hmap)
-	h.hash0 = fastrand()
-	return h
-}
-
-// makemap make(map[k]v, hint) 的实现
-// 如果编译器已经检测到能够在栈上创建 map 或 第一个桶，则 h 或 bucket 非空
-// 如果 h 非空，则能够直接在 h 上创建 map
-// 如果 h.buckets 非空，则指向的 bucket 可以用作第一个存储桶
+// makemap make(map[k]v, hint) 的实现，如果编译器已经检测到能够在栈上创建 map 或 第一个桶，则 h 或 bucket 非空
+// 如果 h 非空，则能够直接在 h 上创建 map, 如果 h.buckets 非空，则指向的 bucket 可以用作第一个存储桶
 func makemap(t *maptype, hint int, h *hmap) *hmap {
 	// 计算需要申请的内存大小，并进行校验
 	mem, overflow := math.MulUintptr(uintptr(hint), t.bucket.size)

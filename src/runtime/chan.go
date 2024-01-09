@@ -48,6 +48,55 @@ type waitq struct {
 	last  *sudog // 指向goroutine队列的最后一个
 }
 
+// 将 sudog 添加到协程的等待队列的尾部
+func (q *waitq) enqueue(sgp *sudog) {
+	sgp.next = nil
+	x := q.last
+	if x == nil {
+		sgp.prev = nil
+		q.first = sgp
+		q.last = sgp
+		return
+	}
+	sgp.prev = x
+	x.next = sgp
+	q.last = sgp
+}
+
+// 从协程的等待队列首部取出 sudog
+func (q *waitq) dequeue() *sudog {
+	for {
+		// 获取队列中的首个协程
+		sgp := q.first
+		if sgp == nil {
+			// 为空则直接返回
+			return nil
+		}
+		y := sgp.next
+		if y == nil {
+			// 如果该协程下个协程为空，则整个队列都为空
+			q.first = nil
+			q.last = nil
+		} else {
+			// 否则将下个协程的前置指针置空
+			y.prev = nil
+			// 将下个赋给首位
+			q.first = y
+			// 将要出队的协程的后置指针置空，切断与其他协程的联系
+			sgp.next = nil
+		}
+
+		// 如果一个 goroutine 因为 select 而被放到这个队列上，那么在被不同情况唤醒的 goroutine 和它抓取通道锁之间有一个小窗口。
+		// 一旦它有了锁，它就会将自己从队列中删除，所以之后我们不会看到它。
+		// 我们在 G 结构中使用一个标志来发出这个 goroutine 的信号，其他人何时赢得了竞争但 goroutine 还没有将自己从队列中删除
+		if sgp.isSelect && !atomic.Cas(&sgp.g.selectDone, 0, 1) {
+			continue
+		}
+
+		return sgp
+	}
+}
+
 //go:linkname reflect_makechan reflect.makechan
 func reflect_makechan(t *chantype, size int) *hchan {
 	return makechan(t, size)
@@ -111,24 +160,6 @@ func makechan(t *chantype, size int) *hchan {
 		print("makechan: chan=", c, "; elemsize=", elem.size, "; dataqsiz=", size, "\n")
 	}
 	return c
-}
-
-// chanbuf 获取 buf 中第 i 个位置的元素
-func chanbuf(c *hchan, i uint) unsafe.Pointer {
-	return add(c.buf, uintptr(i)*uintptr(c.elemsize))
-}
-
-// full 函数检测 channel 缓冲区是否已满，主要分为两种情况:
-// 如果 channel 没有缓冲区，查看是否存在接收者
-// 如果 channel 有缓冲区, 比较元素数量和缓冲区长度是否一致
-func full(c *hchan) bool {
-	// c.dataqsiz 是不可变的（在创建通道后永远不会写入），因此在通道操作期间随时读取是安全的。
-	if c.dataqsiz == 0 {
-		// 无缓冲，且没有消费队列
-		return c.recvq.first == nil
-	}
-	// 有缓冲，且缓冲区大小和chan中实际元素个数相等，即满了
-	return c.qcount == c.dataqsiz
 }
 
 // go:nosplit 编译代码中 c <- X 的入口点
@@ -325,12 +356,22 @@ func sendDirect(t *_type, sg *sudog, src unsafe.Pointer) {
 	memmove(dst, src, t.size)
 }
 
-// dst 在当前 goroutine 的栈上，src 是另一个 goroutine 的栈
-func recvDirect(t *_type, sg *sudog, dst unsafe.Pointer) {
-	// channel 被锁定，因此 src 在此操作期间不会移动
-	src := sg.elem
-	typeBitsBulkBarrier(t, uintptr(dst), uintptr(src), t.size)
-	memmove(dst, src, t.size)
+// chanbuf 获取 buf 中第 i 个位置的元素
+func chanbuf(c *hchan, i uint) unsafe.Pointer {
+	return add(c.buf, uintptr(i)*uintptr(c.elemsize))
+}
+
+// full 函数检测 channel 缓冲区是否已满，主要分为两种情况:
+// 如果 channel 没有缓冲区，查看是否存在接收者
+// 如果 channel 有缓冲区, 比较元素数量和缓冲区长度是否一致
+func full(c *hchan) bool {
+	// c.dataqsiz 是不可变的（在创建通道后永远不会写入），因此在通道操作期间随时读取是安全的。
+	if c.dataqsiz == 0 {
+		// 无缓冲，且没有消费队列
+		return c.recvq.first == nil
+	}
+	// 有缓冲，且缓冲区大小和chan中实际元素个数相等，即满了
+	return c.qcount == c.dataqsiz
 }
 
 // 关闭 channel 后，对于等待接收者而言，会收到一个相应类型的零值。对于等待发送者，会直接 panic。
@@ -644,6 +685,14 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 	goready(gp, skip+1)
 }
 
+// dst 在当前 goroutine 的栈上，src 是另一个 goroutine 的栈
+func recvDirect(t *_type, sg *sudog, dst unsafe.Pointer) {
+	// channel 被锁定，因此 src 在此操作期间不会移动
+	src := sg.elem
+	typeBitsBulkBarrier(t, uintptr(dst), uintptr(src), t.size)
+	memmove(dst, src, t.size)
+}
+
 func chanparkcommit(gp *g, chanLock unsafe.Pointer) bool {
 	// 有未解锁的 sudogs 指向 gp 的堆栈。堆栈复制必须锁定那些 sudogs 的通道。
 	// 在这里设置 activeStackChans，而不是在我们尝试 park 之前，因为我们可能在通道锁上的堆栈增长中陷入死锁。
@@ -740,55 +789,6 @@ func reflect_chancap(c *hchan) int {
 //go:linkname reflect_chanclose reflect.chanclose
 func reflect_chanclose(c *hchan) {
 	closechan(c)
-}
-
-// 将 sudog 添加到协程的等待队列的尾部
-func (q *waitq) enqueue(sgp *sudog) {
-	sgp.next = nil
-	x := q.last
-	if x == nil {
-		sgp.prev = nil
-		q.first = sgp
-		q.last = sgp
-		return
-	}
-	sgp.prev = x
-	x.next = sgp
-	q.last = sgp
-}
-
-// 从协程的等待队列首部取出 sudog
-func (q *waitq) dequeue() *sudog {
-	for {
-		// 获取队列中的首个协程
-		sgp := q.first
-		if sgp == nil {
-			// 为空则直接返回
-			return nil
-		}
-		y := sgp.next
-		if y == nil {
-			// 如果该协程下个协程为空，则整个队列都为空
-			q.first = nil
-			q.last = nil
-		} else {
-			// 否则将下个协程的前置指针置空
-			y.prev = nil
-			// 将下个赋给首位
-			q.first = y
-			// 将要出队的协程的后置指针置空，切断与其他协程的联系
-			sgp.next = nil
-		}
-
-		// 如果一个 goroutine 因为 select 而被放到这个队列上，那么在被不同情况唤醒的 goroutine 和它抓取通道锁之间有一个小窗口。
-		// 一旦它有了锁，它就会将自己从队列中删除，所以之后我们不会看到它。
-		// 我们在 G 结构中使用一个标志来发出这个 goroutine 的信号，其他人何时赢得了竞争但 goroutine 还没有将自己从队列中删除
-		if sgp.isSelect && !atomic.Cas(&sgp.g.selectDone, 0, 1) {
-			continue
-		}
-
-		return sgp
-	}
 }
 
 func (c *hchan) raceaddr() unsafe.Pointer {
