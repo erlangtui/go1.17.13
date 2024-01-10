@@ -135,7 +135,6 @@ func makechan(t *chantype, size int) *hchan {
 	switch {
 	case mem == 0:
 		// 当chan为无缓冲或元素为空结构体时，需要分配的内存为0，仅分配需要存储chan的内存
-		// Queue or element size is zero.
 		c = (*hchan)(mallocgc(hchanSize, nil, true))
 		// Race detector uses this location for synchronization.
 		c.buf = c.raceaddr()
@@ -162,7 +161,7 @@ func makechan(t *chantype, size int) *hchan {
 	return c
 }
 
-// go:nosplit 编译代码中 c <- X 的入口点
+//go:nosplit 编译代码中 c <- X 的入口点
 func chansend1(c *hchan, elem unsafe.Pointer) {
 	chansend(c, elem, true, getcallerpc())
 }

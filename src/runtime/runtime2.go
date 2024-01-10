@@ -347,41 +347,24 @@ type gobuf struct {
 // 一个g可以在许多等待列表中，所以一个g可能有很多sudog;并且许多 GS 可能正在等待同一个同步对象，因此一个对象可能有很多 sudogs。
 // SUDOGS是从特殊的池中分配的。使用获取Sudog和释放Sudog来分配和释放它们。
 type sudog struct {
-	// The following fields are protected by the hchan.lock of the
-	// channel this sudog is blocking on. shrinkstack depends on
-	// this for sudogs involved in channel ops.
-	// 以下字段是受此 hchan.lock 保护的，当 sudog 阻塞在通道上。ShrinkStack 依赖于参与渠道运营的 suDogs。
+	// 以下字段是受此 hchan.lock 保护的，当 sudog 阻塞在chan上，shrinkstack depends on this for sudogs involved in channel ops.
 
-	g *g // 协程
-
+	g    *g     // 协程
 	next *sudog // 下一个等待的 G
 	prev *sudog // 上一个等待的 G
-	// 指向堆上元素的指针，也可能在栈上
-	elem unsafe.Pointer // data element (may point to stack)
 
-	// The following fields are never accessed concurrently.
-	// For channels, waitlink is only accessed by g.
-	// For semaphores, all fields (including the ones above)
-	// are only accessed when holding a semaRoot lock.
+	elem unsafe.Pointer // 指向堆上元素的指针，也可能在栈上
 
 	// 以下字段永远不会同时访问。
-	// 对于 chain，waitlink只能由 g 访问。
-	// 对于信号量，所有字段（包括上述字段）仅在持有 semaRoot 锁时访问。
+	// 对于 chan，waitlink只能由 g 访问。对于信号量，所有字段（包括上述字段）仅在持有 semaRoot 锁时访问。
 	acquiretime int64
 	releasetime int64
 	ticket      uint32
 
-	// isSelect indicates g is participating in a select, so
-	// g.selectDone must be CAS'd to win the wake-up race.
-	// isSelect 表示 g 正在参与选择，因此 g.selectDone 必须是 CAS 才能赢得唤醒竞赛，乐观锁
+	// isSelect 表示 g 正在参与选择，因此 g.selectDone 必须是 CAS 才能赢得唤醒竞争，乐观锁
 	isSelect bool
 
-	// success indicates whether communication over channel c
-	// succeeded. It is true if the goroutine was awoken because a
-	// value was delivered over channel c, and false if awoken
-	// because c was closed.
-
-	// success 指示通过通道 C 的通信是否成功。
+	// success 指示通过通道 c 的通信是否成功。
 	// 如果 goroutine 因为通过通道 c 传递了值而被唤醒，则为 true，
 	// 如果因为 c 被关闭而唤醒，则为 false。
 	success bool
