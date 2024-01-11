@@ -43,10 +43,7 @@ func stopTimer(*runtimeTimer) bool
 func resetTimer(*runtimeTimer, int64) bool
 func modTimer(t *runtimeTimer, when, period int64, f func(interface{}, uintptr), arg interface{}, seq uintptr)
 
-// The Timer type represents a single event.
-// When the Timer expires, the current time will be sent on C,
-// unless the Timer was created by AfterFunc.
-// A Timer must be created with NewTimer or AfterFunc.
+// Timer 类型表示单个事件。当计时器到期时，当前时间将在 C 上发送，除非计时器是由 AfterFunc 创建的。必须使用 NewTimer 或 AfterFunc 创建计时器。
 type Timer struct {
 	C <-chan Time
 	r runtimeTimer

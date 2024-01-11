@@ -29,16 +29,12 @@ type Pool struct {
 	// 本地切片 poolLocal 的大小，一般是系统核数，除非程序中自定义了运行核数
 	localSize uintptr
 	/*
-		Victim cache（牺牲者缓存）是一种用于提高缓存性能的缓存内存类型，临时存储从主缓存中驱逐出来的数据，它通常位于主缓存和主存储器之间。
-		当主缓存发生缓存未命中时，在访问主存储器之前会检查牺牲者缓存。如果请求的数据在牺牲者缓存中找到，就认为是缓存命中，并将数据返回给处理器，而无需访问主存储器。
-		作为一种优化缓存的技术，助于减少平均内存访问时间，提高整体系统性能。
-		当主缓存需要用新数据替换一个缓存行时，它会将最近最少使用（LRU）的缓存行放入牺牲者缓存中，以防近期再次需要该数据。
-		牺牲者缓存通常比主缓存更小，关联度更低。它的目的是捕获那些可能在不久的将来再次访问的缓存行，但由于主缓存的大小限制而无法容纳。
-		通过将这些被驱逐的缓存行保留在一个单独的缓存中，系统可以减少对主存储器的访问次数，提高整体性能。
-		在一轮 GC 到来时，victim 和 victimSize 会分别接管 local 和 localSize
-		当从 local 中未查询到时，会进一步在 victim 中查询；
-		在 GC 后冷启动时，local 中没有缓存对象，victim 中有，能够避免冷启时大量创建对象导致性能抖动，让分配对象更平滑
-	*/
+	* Victim Cache（牺牲者缓存）是一种用于提高缓存性能的缓存内存类型，临时存储从主缓存中驱逐出来的数据，它通常位于主缓存和主存储器之间；
+	* 当主缓存发生缓存未命中时，在访问主存储器之前会检查牺牲者缓存；如果请求的数据在牺牲者缓存中找到，就认为是缓存命中，并将数据返回给处理器，而无需访问主存储器；
+	* 当主缓存需要用新数据替换一个缓存行时，它会将最近最少使用（LRU）的缓存行放入牺牲者缓存中，以防近期再次需要该数据；
+	* 牺牲者缓存通常比主缓存更小，关联度更低，它的目的是捕获那些可能在不久的将来再次访问的缓存行；
+	* 由于主缓存的大小限制而无法容纳，通过将这些被驱逐的缓存行保留在一个单独的缓存中，作为一种优化缓存的技术，可以减少系统对主存储器的访问次数，提高整体性能；
+	 */
 	victim     unsafe.Pointer
 	victimSize uintptr
 
@@ -46,7 +42,7 @@ type Pool struct {
 	New func() interface{}
 }
 
-// 每一个 P 所拥有的私有对象和共享对象链表
+// 每一个 P 所拥有的私有对象和共享对象的元素
 type poolLocalInternal struct {
 	private interface{} // 当前 P 私有的对象，只能由其所属的当前 P 存储和获取
 	shared  poolChain   // 当前 P 与其他 P 共有双向链表，链表中存储对象，当前 P 是生产者，能够 pushHead/popHead，其他 P 是消费者，只能 popTail.
@@ -57,12 +53,11 @@ type poolLocal struct {
 	poolLocalInternal
 
 	/*
-		CPU 在访问数据是按照 64/128 字节作为一行一起加载的，如果某个变量不足一行，则会和其他变量同时加载进 CPU CacheLine，当一个变量失效时会导致该行其他变量也失效，这是一种伪共享现象，
-		第一、二层 CPU 缓存是每个 CPU 各自独有的，第三层 CPU 缓存是不同 CPU 之间共享的，CPU CacheLine 中有变量失效时，会导致整个 CPU CacheLine 都需要从主存中重新加载，对性能有影响，
-		如果没有 pad 字段，可能会导致一个 CPU CacheLine 中存在多个 poolLocal 对象，而这些对象又属于不同 CPU 上的 P，
-		当某个 CPU 上的 P 修改了 CPU CacheLine 上的该 P 对应的 poolLocal 时，会导致其他 poolLocal 失效，那么该 poolLocal 对应的 P 所在的 CPU 就需要重新加载，
-		所以，pad 的目的是让专属于某个 P 的 poolLocal 独占一整个 CPU CacheLine，避免使得其他 poolLocal 在 CPU CacheLine 中失效，毕竟该 P 是优先访问自己的 poolLocal
-	*/
+	* CPU 在访问数据是按照 64/128 字节作为一行一起加载的，如果某个变量不足一行，则会和其他变量同时加载进 CPU CacheLine，当一个变量失效时会导致该行其他变量也失效，这是一种伪共享现象；
+	* 第一、二层 CPU 缓存是每个 CPU 各自独有的，第三层 CPU 缓存是不同 CPU 之间共享的，CPU CacheLine 中有变量失效时，会导致整个 CPU CacheLine 都需要从主存中重新加载，对性能有影响；
+	* 如果没有 pad 字段，可能会导致一个 CPU CacheLine 中存在多个 poolLocal 对象，而这些对象又属于不同 CPU 上的 P，当某个 CPU 上的 P 修改了 CPU CacheLine 上的该 P 对应的 poolLocal 时，会导致其他 poolLocal 失效，那么该 poolLocal 对应的 P 所在的 CPU 就需要重新加载；
+	* 所以，pad 的目的是让专属于某个 P 的 poolLocal 独占一整个 CPU CacheLine，避免使得其他 poolLocal 在 CPU CacheLine 中失效，毕竟该 P 是优先访问自己的 poolLocal；
+	 */
 	pad [128 - unsafe.Sizeof(poolLocalInternal{})%128]byte
 }
 
@@ -251,13 +246,9 @@ func poolCleanup() {
 }
 
 var (
-	allPoolsMu Mutex // 保护 oldPools，避免在 poolCleanup 与 pinSlow 时有竞争
-
-	// allPools 是具有非空主缓存的一组池。受 1) allPoolsMu and pinning or 2) STW 保护
-	allPools []*Pool
-
-	// oldPools 是具有非空 victim 缓存的一组池。受 STW 保护.
-	oldPools []*Pool
+	allPoolsMu Mutex   // 保护 oldPools，避免在 poolCleanup 与 pinSlow 时有竞争
+	allPools   []*Pool // allPools 是具有非空主缓存的一组池，需要清除掉。受 1) allPoolsMu and pinning or 2) STW 保护
+	oldPools   []*Pool // oldPools 是具有非空 victim 缓存的一组池。受 STW 保护
 )
 
 func init() {
