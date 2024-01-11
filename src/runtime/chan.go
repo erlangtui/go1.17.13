@@ -4,13 +4,6 @@
 
 package runtime
 
-// 不变量:
-// c.sendq 和 c.recvq 中至少有一个是空的，除非是一个没有缓冲的通道，在使用 select 语句发送和接收时，
-// 它被一个单独的线程阻塞，在这种情况下，c.sendq 和 c.recvq 的长度只受 select 语句大小的限制。
-// 对于有缓冲区的 chan 也是如此
-//  c.qcount > 0 时， c.recvq 为空.
-//  c.qcount < c.dataqsiz 时， c.sendq 为空.
-
 import (
 	"runtime/internal/atomic"
 	"runtime/internal/math"
@@ -373,12 +366,14 @@ func full(c *hchan) bool {
 	return c.qcount == c.dataqsiz
 }
 
-// 关闭 channel 后，对于等待接收者而言，会收到一个相应类型的零值。对于等待发送者，会直接 panic。
-// 所以，在不了解 channel 还有没有接收者的情况下，不能贸然关闭 channel。
-// close 函数先上一把大锁，接着把所有挂在这个 channel 上的 sender 和 receiver 全都连成一个 sudog 链表，再解锁。最后，再将所有的 sudog 全都唤醒。
-// 唤醒之后，该干嘛干嘛。sender 会继续执行 chansend 函数里 goparkunlock 函数之后的代码，很不幸，检测到 channel 已经关闭了，panic。receiver 则比较幸运，进行一些扫尾工作后，
+// close 函数用于关闭管道 c，如果 c 是 nil 管道，直接 panic，关闭一个 nil 的 chan 会 panic；
+// close 函数先上一把大锁，将 c 设置为关闭状态，将所有阻塞等待的消费者 goroutine 出队，赋给其一个相应类型的零值，并设置 sg.success 为 false，表示是因为管道关闭而被唤醒的，然后将该 goroutine加入到一个链表中；
+// 将所有阻塞等待的生产者 goroutine 出队，同样设置 sg.success 为 false，表示是因为管道关闭而被唤醒的，然后将该 goroutine加入到一个链表中；解锁，然后将该链表中的所有 goroutine 唤醒；
+// 被唤醒后，生产者 goroutine 会继续执行 chansend 函数里 goparkunlock 函数之后的代码，检测到自己是因为 chan 关闭而被唤醒的，直接 panic；
+// 消费者 goroutine 同样会继续执行 chanrecv 函数里 goparkunlock 函数之后的代码，检测到自己是因为 chan 关闭而被唤醒的，返回 received 为 false，表示读取的是零值；
+// 关闭 chan 后，对于阻塞等待的消费者而言，会收到一个相应类型的零值，对于阻塞等待的生产者而言，会直接 panic，所以，在不了解 chan 还有没有接收者的情况下，不能贸然关闭 chan；
 func closechan(c *hchan) {
-	if c == nil { // todo 关闭一个空的 chan 会 panic
+	if c == nil { // todo 关闭一个 nil 的 chan 会 panic
 		panic(plainError("close of nil channel"))
 	}
 	// 加锁，这个锁的粒度比较大，会持续到释放完所有的 sudog 才解锁
@@ -640,6 +635,9 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 // 对于同步通道，两个值是相同的。对于异步信道，接收方从 c 缓冲区获取数据，发送方的数据放入 c 缓冲区。
 // 通道 c 必须是满的和锁定的。recv 用 unlockf 解锁 c。
 // sg 必须已经从 c 出队。非 nil 的 ep 必须指向堆或调用者的堆栈。
+// * recv 处理无缓冲区或是满管道 c 上的读出操作，对于无缓冲管道，直接从生产者 goroutine 拷贝数据到消费者 goroutine
+// * 对于缓冲性满管道，写入和读出索引是相同的，直接从管道的读出索引处拷贝数据到消费者者 goroutine，并从生产者 goroutine 拷贝数据到管道的该处，同时更新生产和写入索引；
+// * 将发送者协程的数据指针置空，并将 sg.success 置为 true，表示该生产者 goroutine 是因为写入值成功而被唤醒，然后唤醒该 goroutine；
 func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 	// 还有阻塞的发送者协程，说明没有缓冲区或是缓冲区已满
 	if c.dataqsiz == 0 {

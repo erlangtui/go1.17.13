@@ -177,7 +177,7 @@ func (h *hmap) sameSizeGrow() bool {
 	return h.flags&sameSizeGrow != 0
 }
 
-// noldbuckets calculates the number of buckets prior to the current map growth.
+// noldbuckets 计算当前 map 扩容太之前的存储桶数
 func (h *hmap) noldbuckets() uintptr {
 	oldB := h.B
 	if !h.sameSizeGrow() {
