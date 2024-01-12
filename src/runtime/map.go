@@ -257,7 +257,7 @@ func bucketMask(b uint8) uintptr {
 	return bucketShift(b) - 1
 }
 
-// tophash 计算 hash 的顶部哈希值
+// tophash 计算 hash 的顶部 8 位哈希值
 func tophash(hash uintptr) uint8 {
 	top := uint8(hash >> (sys.PtrSize*8 - 8))
 	if top < minTopHash {
