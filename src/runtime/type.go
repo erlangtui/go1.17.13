@@ -367,34 +367,44 @@ type interfacetype struct {
 	mhdr    []imethod
 }
 
+// map 的类型信息
 type maptype struct {
-	typ    _type
-	key    *_type
-	elem   *_type
-	bucket *_type // internal type representing a hash bucket
-	// function for hashing keys (ptr to key, seed) -> hash
-	hasher     func(unsafe.Pointer, uintptr) uintptr
-	keysize    uint8  // size of key slot
-	elemsize   uint8  // size of elem slot
-	bucketsize uint16 // size of bucket
-	flags      uint32
+	typ        _type                                 // 结构体自身的类型信息
+	key        *_type                                // 键类型
+	elem       *_type                                // 值类型
+	bucket     *_type                                // 哈希桶的内部类型
+	hasher     func(unsafe.Pointer, uintptr) uintptr // 根据键地址和哈希种子，计算键哈希值的函数
+	keysize    uint8                                 // 键的大小，字节数
+	elemsize   uint8                                 // 值的大小，字节数
+	bucketsize uint16                                // 桶的大小，字节数
+	flags      uint32                                // 标志位
 }
 
 // Note: flag values must match those used in the TMAP case
 // in ../cmd/compile/internal/reflectdata/reflect.go:writeType.
-func (mt *maptype) indirectkey() bool { // store ptr to key instead of key itself
+
+// 是否存储 key 的指针而不是 key 本身，通过检查 mt.flags 的第一位来确定是否需要间接引用 key
+func (mt *maptype) indirectkey() bool {
 	return mt.flags&1 != 0
 }
-func (mt *maptype) indirectelem() bool { // store ptr to elem instead of elem itself
+
+// 是否存储 elem 的指针而不是 elem 本身，通过检查 mt.flags 的第二位来确定是否需要间接引用 elem
+func (mt *maptype) indirectelem() bool {
 	return mt.flags&2 != 0
 }
-func (mt *maptype) reflexivekey() bool { // true if k==k for all keys
+
+// 是否对于所有的 key，k==k 是否成立。通过检查 mt.flags 的第三位来确定是否是 reflexive key
+func (mt *maptype) reflexivekey() bool {
 	return mt.flags&4 != 0
 }
-func (mt *maptype) needkeyupdate() bool { // true if we need to update key on an overwrite
+
+// 在进行覆盖操作时是否需要更新 key，通过检查 mt.flags 的第四位来确定是否需要更新 key
+func (mt *maptype) needkeyupdate() bool {
 	return mt.flags&8 != 0
 }
-func (mt *maptype) hashMightPanic() bool { // true if hash function might panic
+
+// hash 函数是否可能引发 panic，通过检查 mt.flags 的第五位来确定是否可能引发 panic
+func (mt *maptype) hashMightPanic() bool {
 	return mt.flags&16 != 0
 }
 
