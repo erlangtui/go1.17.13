@@ -383,12 +383,12 @@ type maptype struct {
 // Note: flag values must match those used in the TMAP case
 // in ../cmd/compile/internal/reflectdata/reflect.go:writeType.
 
-// 是否存储 key 的指针而不是 key 本身，通过检查 mt.flags 的第一位来确定是否需要间接引用 key
+// key 是否为指针类型，通过检查 mt.flags 的第一位来确定是否需要间接引用 key
 func (mt *maptype) indirectkey() bool {
 	return mt.flags&1 != 0
 }
 
-// 是否存储 elem 的指针而不是 elem 本身，通过检查 mt.flags 的第二位来确定是否需要间接引用 elem
+// elem 是否为指针类型，通过检查 mt.flags 的第二位来确定是否需要间接引用 elem
 func (mt *maptype) indirectelem() bool {
 	return mt.flags&2 != 0
 }

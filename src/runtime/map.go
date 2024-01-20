@@ -9,7 +9,7 @@ package runtime
 // 哈希值的低位用于选择存储桶。每个存储桶都包含每个哈希值的几个高阶位，以区分单个存储桶中的条目。
 // 如果一个存储桶的哈希值超过 8 个，我们会链接额外的存储桶。
 // 当哈希表扩容时，我们会分配一个两倍大的新存储桶数组。
-// 存储桶将以增量更新的方式从旧存储桶数组复制到新存储桶数组。
+// 存储桶将以翻倍更新的方式从旧存储桶数组复制到新存储桶数组。
 //
 // map 迭代器遍历存储桶数组，并按遍历顺序返回键（存储桶，然后是溢出链顺序，然后是存储桶索引）。
 // 为了维护迭代语义，我们从不在其存储桶中移动 key（如果这样做，key可能会返回 0 或 2 次）。
@@ -55,7 +55,7 @@ const (
 	maxKeySize  = 128 // 保证键值内联的最大尺寸
 	maxElemSize = 128
 
-	// 数据偏移量应为 bmap 结构的大小，但需要正确对齐，即内存对齐后 bmap 占用的实际大小，对于 amd64p32，这意味着 64 位对齐，即使指针是 32 位。
+	// key 相对于 bmap 起始地址的偏移，即内存对齐后 bmap 占用的实际大小，经过 64 位对齐后的差值
 	dataOffset = unsafe.Offsetof(struct {
 		b bmap
 		v int64
@@ -64,12 +64,12 @@ const (
 	// 每个桶(包括它的溢出桶，如果有的话)将在迁移状态中有全部或没有它的条目(除了在 evacuate() 方法期间，
 	// 这只发生在map写入期间，因此在此期间没有其他人可以观察到地图)。
 	// 可能的 tophash 值（顶部哈希值）
-	emptyRest      = 0 // 此单元格为空，并且在较高的索引或溢出处不再有非空单元格。
+	emptyRest      = 0 // 此单元格为空，并且在较高的索引或溢出处不再有非空单元格
 	emptyOne       = 1 // 此单元格为空
-	evacuatedX     = 2 // 键值是有效的，入口已迁移到大表的前半部分。
-	evacuatedY     = 3 // 键值是有效的，入口已迁移到大表的后半部分。.
-	evacuatedEmpty = 4 // 单元格为空，桶已经迁移走了
-	minTopHash     = 5 // 正常填充单元格的最小顶部哈希。
+	evacuatedX     = 2 // 键值是有效的，入口已迁移到新桶的前半部分
+	evacuatedY     = 3 // 键值是有效的，入口已迁移到新桶的后半部分
+	evacuatedEmpty = 4 // 单元格为空，数据已经迁移走了
+	minTopHash     = 5 // 正常填充单元格的最小顶部哈希
 
 	// flags
 	iterator     = 1 // 可能存在使用存储桶的迭代器
@@ -81,7 +81,7 @@ const (
 	noCheck = 1<<(8*sys.PtrSize) - 1
 )
 
-// isEmpty 报告给定的 tophash 数组 entry 是否表示空存储桶 entry
+// isEmpty 报告给定的 tophash 数组元素是否为空
 func isEmpty(x uint8) bool {
 	return x <= emptyOne
 }
@@ -90,7 +90,7 @@ func isEmpty(x uint8) bool {
 type hmap struct {
 	count      int            // map 元素个数，必须在第一位，由内置函数 len() 调用
 	flags      uint8          // 标志
-	B          uint8          // 桶的数量的对数值，桶数：2^B
+	B          uint8          // 常规桶的数量的对数值，桶数：2^B，如果在搬迁过程中则指的是新常规桶数量的对数
 	noverflow  uint16         // 溢出桶的大概数量，为了保持hmap较小，noverflow 是一个uint16。
 	hash0      uint32         // 哈希种子
 	buckets    unsafe.Pointer // 指向桶的指针，多个桶在内存上是连续的，当 count 为 0 时，为 nil
@@ -167,12 +167,12 @@ func (h *hmap) createOverflow() {
 	}
 }
 
-// 是否正在扩容，向同尺寸的或更大尺寸的 map 扩容
+// 是否正在扩容，等量扩容或翻倍扩容
 func (h *hmap) growing() bool {
 	return h.oldbuckets != nil
 }
 
-// 当前扩容是否是向同尺寸的 map 扩容
+// 当前扩容是否是等量扩容
 func (h *hmap) sameSizeGrow() bool {
 	return h.flags&sameSizeGrow != 0
 }
@@ -234,19 +234,19 @@ type hiter struct {
 	t           *maptype       // 要遍历的 map 的类型
 	h           *hmap          // 要遍历的 map
 	buckets     unsafe.Pointer // map 的常规桶，在初始化 hiter 时被赋值
-	bptr        *bmap          // current bucket
+	bptr        *bmap          // 当前桶的指针
 	overflow    *[]*bmap       // 记录溢出桶数组指针
 	oldoverflow *[]*bmap       // 记录旧溢出桶数组指针
 	startBucket uintptr        // 迭代器开始遍历的桶的序号
 	offset      uint8          // 迭代器在桶中开始遍历的索引
-	wrapped     bool           // already wrapped around from end of bucket array to beginning
+	wrapped     bool           // 已经从存储桶数组的末尾缠绕到开头
 	B           uint8
 	i           uint8
 	bucket      uintptr // 当前迭代的桶
 	checkBucket uintptr
 }
 
-// bucketShift 返回 1<<b，即 2^b 针对代码生成进行了优化
+// bucketShift 返回 1<<b，即 2^b， 针对代码生成进行了优化
 func bucketShift(b uint8) uintptr {
 	// Masking the shift amount allows overflow checks to be elided.
 	return uintptr(1) << (b & (sys.PtrSize*8 - 1))
@@ -280,7 +280,7 @@ func makemap64(t *maptype, hint int64, h *hmap) *hmap {
 	return makemap(t, int(hint), h)
 }
 
-// makemap make(map[k]v, hint) 的实现，如果编译器已经检测到能够在栈上创建 map 或 第一个桶，则 h 或 bucket 非空
+// makemap make(map[k]v, hint) 的实现，如果编译器已经检测到能够在栈上创建 map 或第一个桶，则 h 或 bucket 非空
 // 如果 h 非空，则能够直接在 h 上创建 map, 如果 h.buckets 非空，则指向的 bucket 可以用作第一个存储桶
 func makemap(t *maptype, hint int, h *hmap) *hmap {
 	// 计算需要申请的内存大小，并进行校验
@@ -592,44 +592,61 @@ func mapassign(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 	}
 
 again:
-	bucket := hash & bucketMask(h.B)
+	bucket := hash & bucketMask(h.B) // 计算该 key 对应的桶的索引号
 	if h.growing() {
+		// 如果 map 处于扩容过程中，则迁移该桶及其后续未迁移的桶（如果还有的话）
 		growWork(t, h, bucket)
 	}
+	// 直接从常规桶数组 h.buckets 中获取 bucket 索引对应的桶（如果在搬迁，该常规桶数组是新的，h.B 也是新常规桶数组的长度对数）
 	b := (*bmap)(add(h.buckets, bucket*uintptr(t.bucketsize)))
 	top := tophash(hash)
 
-	var inserti *uint8
-	var insertk unsafe.Pointer
-	var elem unsafe.Pointer
-bucketloop:
+	var inserti *uint8         // 顶部哈希值数组中空单元格的地址
+	var insertk unsafe.Pointer // key 数组中空单元格的地址
+	var elem unsafe.Pointer    // elem 数组中空单元格的地址或是 k 对应的 elem 的地址
+
+bucketloop: // 从桶中找到当前 k，或是找到一个空的单元格
 	for {
+		// 依次遍历常规桶及其溢出桶，在桶中依次遍历每个顶部哈希值、key、elem
 		for i := uintptr(0); i < bucketCnt; i++ {
 			if b.tophash[i] != top {
+				// 顶部哈希值不相等，即不是要找的 k
 				if isEmpty(b.tophash[i]) && inserti == nil {
+					// 如果当前 b.tophash[i] 为空，且 inserti 为空，则记录当前 i 对应的 key、elem 对应的地址
+					// 即 inserti 用于存储第一个为空的顶部哈希值数组单元格的地址
 					inserti = &b.tophash[i]
 					insertk = add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
 					elem = add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.elemsize))
 				}
 				if b.tophash[i] == emptyRest {
+					// 如果此单元格为空，并且在较高的索引或溢出处不再有非空单元格，则跳出大循环 bucketloop
 					break bucketloop
 				}
+				// 如果此空单元格之后还有其他的非空单元格，继续往后遍历其他单元格
 				continue
 			}
+			// 顶部哈希值相等，可能是要找到的 k，取 i 对应的位置的 key
 			k := add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
 			if t.indirectkey() {
+				// 存储的是指针，解引用
 				k = *((*unsafe.Pointer)(k))
 			}
+			// 判断存储的 key 是否与查找的 k 相等
 			if !t.key.equal(key, k) {
+				// 不相等，继续往后遍历其他单元格
 				continue
 			}
-			// already have a mapping for key. Update it.
+			// key 相等，找到了该 key
 			if t.needkeyupdate() {
+				// 如果需要更新该 key 则直接更新
 				typedmemmove(t.key, k, key)
 			}
+			// 获取该 key 对应的 elem 的地址，跳转到 done
 			elem = add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.elemsize))
 			goto done
 		}
+		// 如果在该桶中既没有找到当前 k，也没有找到空的单元格或找到的空单元格后较高的索引或溢出处有非空单元格
+		// 则继续往后遍历其他溢出桶
 		ovf := b.overflow(t)
 		if ovf == nil {
 			break
@@ -637,44 +654,50 @@ bucketloop:
 		b = ovf
 	}
 
-	// Did not find mapping for key. Allocate new cell & add entry.
-
+	// 执行到此处，说明没有找到相等的 key
 	// 如果命中了负载因子阈值或是有太多的溢出桶，并且又没有正在扩容，则开始扩容
 	if !h.growing() && (overLoadFactor(h.count+1, h.B) || tooManyOverflowBuckets(h.noverflow, h.B)) {
+		// 开始扩容，创建常规桶数组和溢出桶数组，并分布切换旧桶数组指针和旧溢出桶数组指针的指向，不做实际搬迁
 		hashGrow(t, h)
-		goto again // Growing the table invalidates everything, so try again
+		// 开始扩容后，常规桶数组地址发生改变，数组长度可能也会发生改变，需要跳转到 again 重新开始查找
+		goto again
 	}
 
 	if inserti == nil {
-		// The current bucket and all the overflow buckets connected to it are full, allocate a new one.
+		// 没有找到相等的 key，且 inserti 又为 nil，则说明当前桶及其溢出桶已经满了，直接创建一个新的溢出桶
 		newb := h.newoverflow(t, b)
 		inserti = &newb.tophash[0]
 		insertk = add(unsafe.Pointer(newb), dataOffset)
 		elem = add(insertk, bucketCnt*uintptr(t.keysize))
 	}
 
-	// store new key/elem at insert position
 	if t.indirectkey() {
+		// 存储的是 key 指针，则从堆上申请内存，并赋值地址
 		kmem := newobject(t.key)
 		*(*unsafe.Pointer)(insertk) = kmem
 		insertk = kmem
 	}
 	if t.indirectelem() {
+		// 存储的是 elem 指针，则从堆上申请内存，并赋值地址
 		vmem := newobject(t.elem)
 		*(*unsafe.Pointer)(elem) = vmem
 	}
+	// 执行到此处说明是 map 中新增了元素，记录 key、top，并且 map 中的元素数量加一
 	typedmemmove(t.key, insertk, key)
 	*inserti = top
 	h.count++
 
-done:
+done: // 直接跳转到此处说明是找到了已经存储的 key
 	if h.flags&hashWriting == 0 {
+		// 有其他 goroutine 正在写，抛出错误
 		throw("concurrent map writes")
 	}
-	h.flags &^= hashWriting
+	h.flags &^= hashWriting // 清除写标志
 	if t.indirectelem() {
 		elem = *((*unsafe.Pointer)(elem))
 	}
+	// 返回 value 的地址，直接更新或赋值
+	// TODO 此处了已经解除了写标志，是否存在在更新过程中有其他 goroutine 正在读写的问题？
 	return elem
 }
 
@@ -708,36 +731,45 @@ func mapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
 	// 调用 t.hasher 再后设置 hashWriting，因为 t.hasher 可能会 panic，在这种情况下，实际上还没有进行写入
 	h.flags ^= hashWriting
 
-	bucket := hash & bucketMask(h.B)
+	bucket := hash & bucketMask(h.B) // 计算该 key 对应的桶的索引号
 	if h.growing() {
+		// 如果 map 处于扩容过程中，则迁移该桶及其后续未迁移的桶（如果还有的话）
 		growWork(t, h, bucket)
 	}
 	b := (*bmap)(add(h.buckets, bucket*uintptr(t.bucketsize)))
 	bOrig := b
 	top := tophash(hash)
-search:
+search: // 依次遍历当前桶及其溢出桶
 	for ; b != nil; b = b.overflow(t) {
+		// 依次遍历桶中的每个单元格
 		for i := uintptr(0); i < bucketCnt; i++ {
 			if b.tophash[i] != top {
+				// 顶部哈希值不相等
 				if b.tophash[i] == emptyRest {
+					// 此单元格为空，并且在较高的索引或溢出处不再有非空单元格，说明没有该 key 直接 跳出
 					break search
 				}
+				// 还有其他的顶部哈希值，继续往后查找其他单元格
 				continue
 			}
+			// 顶部哈希值相等，可能能够找到
+			// 获取 key 单元格的地址
 			k := add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
 			k2 := k
 			if t.indirectkey() {
 				k2 = *((*unsafe.Pointer)(k2))
 			}
 			if !t.key.equal(key, k2) {
+				// 存储的 key 与实际待查找的 key 不相等，继续往后查找其他单元格
 				continue
 			}
-			// Only clear key if there are pointers in it.
+			// 存储的 key 相等，找到了，清除存储的 key
 			if t.indirectkey() {
 				*(*unsafe.Pointer)(k) = nil
 			} else if t.key.ptrdata != 0 {
 				memclrHasPointers(k, t.key.size)
 			}
+			// 获取 elem 的单元格地址，并清除 elem
 			e := add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.elemsize))
 			if t.indirectelem() {
 				*(*unsafe.Pointer)(e) = nil
@@ -746,53 +778,64 @@ search:
 			} else {
 				memclrNoHeapPointers(e, t.elem.size)
 			}
-			b.tophash[i] = emptyOne
-			// If the bucket now ends in a bunch of emptyOne states,
-			// change those to emptyRest states.
-			// It would be nice to make this a separate function, but
-			// for loops are not currently inlineable.
+			b.tophash[i] = emptyOne // 将顶部哈希值置为 emptyOne
 			if i == bucketCnt-1 {
+				// 如果位于当前桶的顶部哈希值的最后一个单元格
 				if b.overflow(t) != nil && b.overflow(t).tophash[0] != emptyRest {
+					// 如果溢出桶不为空且溢出桶的顶部哈希值第一个单元格不为 emptyRest，跳转到 notLast
 					goto notLast
 				}
 			} else {
+				// 如果不是位于当前桶的顶部哈希值的最后一个单元格
 				if b.tophash[i+1] != emptyRest {
+					// 且下一个单元格中顶部哈希值不为 emptyRest，则跳转
 					goto notLast
 				}
 			}
+			// 运行到此处说明：
+			// 如果位于当前桶的顶部哈希值的最后一个单元格，要么没有溢出桶，要么溢出桶的顶部哈希值第一个单元格为 emptyRest，即下一个溢出桶单元格都为空
+			// 如果不是位于当前桶的顶部哈希值的最后一个单元格，那么下一个单元格的顶部哈希值为 emptyRest，则下一个及其之后都为空
 			for {
+				// 当前索引 i 对应的 key、elem 都已经清除了，i 之后的也为空，所以顶部哈希值数组 i 处单元格可以置为 emptyRest
 				b.tophash[i] = emptyRest
+				// 继续向前查找其他单元格
 				if i == 0 {
+					// 如果已经的第一个单元格，则找前一个桶
 					if b == bOrig {
-						break // beginning of initial bucket, we're done.
+						// 如果当前桶已经是第一个桶（常规桶），直接退出将其他单元格的顶部哈希值置为 emptyRest 的操作
+						break
 					}
-					// Find previous bucket, continue at its last entry.
 					c := b
 					for b = bOrig; b.overflow(t) != c; b = b.overflow(t) {
+						// 	从第一个桶 bOrig 找到当前桶的前一个桶
 					}
+					// b 现在为前一个桶，将 i 置为顶部哈希值数组的最后一个单元格索引
 					i = bucketCnt - 1
 				} else {
+					// 如果不是第一个单元格，直接往前移一个单元格
 					i--
 				}
 				if b.tophash[i] != emptyOne {
+					// 如果这个单元格不为空，直接退出将其他单元格的顶部哈希值置为 emptyRest 的操作
 					break
 				}
+				// 	这个单元格为空，后面的也都为空，下次循环时将其顶部哈希值置为 emptyRest
 			}
 		notLast:
-			h.count--
-			// Reset the hash seed to make it more difficult for attackers to
-			// repeatedly trigger hash collisions. See issue 25237.
+			h.count-- // 数量减一
 			if h.count == 0 {
+				// 数量为 0 时，重置哈希种子以防止攻击 See issue 25237.
 				h.hash0 = fastrand()
 			}
-			break search
+			break search // 找到了，跳出查找
 		}
 	}
 
 	if h.flags&hashWriting == 0 {
+		// 并发写，抛出错误
 		throw("concurrent map writes")
 	}
-	h.flags &^= hashWriting
+	h.flags &^= hashWriting // 清除写标志
 }
 
 // mapiterinit 初始化用于在 map 上迭代的迭代器 hiter 结构
@@ -991,7 +1034,7 @@ func mapclear(t *maptype, h *hmap) {
 	}
 
 	h.flags ^= hashWriting   // 按位与添加写标志
-	h.flags &^= sameSizeGrow // 按位清除同尺寸扩容标记
+	h.flags &^= sameSizeGrow // 按位清除等量扩容标记
 	h.oldbuckets = nil       // 旧桶数组指针清空
 	h.nevacuate = 0          // 迁移进度归零
 	h.noverflow = 0          // 溢出桶数量归零
@@ -1020,17 +1063,17 @@ func mapclear(t *maptype, h *hmap) {
 	h.flags &^= hashWriting
 }
 
-// 开始扩容，只创建桶数组和溢出桶数组，并分布切换旧的桶数组指针和旧的溢出桶数组指针的指向，不做实际搬迁
+// 开始扩容，只创建常规桶数组和溢出桶数组，并分布切换旧桶数组指针和旧溢出桶数组指针的指向，不做实际搬迁
 func hashGrow(t *maptype, h *hmap) {
-	// 如果命中了负载的因子，则向更大的扩容，否则就是有太多的溢出桶，做同尺寸扩容
+	// 如果命中了负载的因子，则翻倍扩容，否则就是有太多的溢出桶，做等量扩容
 	bigger := uint8(1)
 	if !overLoadFactor(h.count+1, h.B) {
-		// 没有超过负载因子，同尺寸扩容
+		// 没有超过负载因子，等量扩容
 		bigger = 0
 		h.flags |= sameSizeGrow
 	}
 	oldbuckets := h.buckets
-	// 创建新的存储桶数组和下一个溢出桶
+	// 创建新常规桶数组和下一个溢出桶
 	newbuckets, nextOverflow := makeBucketArray(t, h.B+bigger, nil)
 
 	// 清除桶的迭代器的状态
@@ -1039,7 +1082,7 @@ func hashGrow(t *maptype, h *hmap) {
 		flags |= oldIterator
 	}
 	h.B += bigger             // 更新桶数量
-	h.flags = flags           // 更新标志
+	h.flags = flags           // 更新标志，如果是 iterator 则更新为 oldIterator
 	h.oldbuckets = oldbuckets // 旧桶数组指针指向的是当前存储桶数组
 	h.buckets = newbuckets    // 当前存储桶数组指针指向的是新创建的存储数组
 	h.nevacuate = 0           // 迁移进度数置为 0
@@ -1082,12 +1125,15 @@ func tooManyOverflowBuckets(noverflow uint16, B uint8) bool {
 	return noverflow >= uint16(1)<<(B&15)
 }
 
+// 迁移第 bucket 个桶及其溢出桶（如果有）
 func growWork(t *maptype, h *hmap, bucket uintptr) {
 	// 确保迁移的 oldbucket 桶与将要使用的 bucket 桶对应
 	evacuate(t, h, bucket&h.oldbucketmask())
 
-	// 如果正在扩容，多迁移一个 bucket 桶
+	// 经过 evacuate 迁移后，h.nevacuate 在函数 advanceEvacuationMark 更新
 	if h.growing() {
+		// 如果正在扩容，多迁移一个 h.nevacuate 索引处的桶
+		// 如果扩容完成，则 h.oldbuckets 为 nil，该语句进不来
 		evacuate(t, h, h.nevacuate)
 	}
 }
@@ -1098,50 +1144,58 @@ func bucketEvacuated(t *maptype, h *hmap, bucket uintptr) bool {
 	return evacuated(b)
 }
 
-// evacDst 数算目的地
+// evacDst 迁移目的地
 type evacDst struct {
 	b *bmap          // 当前迁移目的桶
-	i int            // key/elem 将要迁往 b 中的索引 i 处
-	k unsafe.Pointer // 存储当前 key 的地址
-	e unsafe.Pointer // 存档当前 elem 的地址
+	i int            // key/elem 将要迁往目的桶 b 中的索引 i 处
+	k unsafe.Pointer // 目的桶 b 中第 i 个 key 的地址
+	e unsafe.Pointer // 目的桶 b 中第 i 个 elem 的地址
 }
 
-// 负责具体的数据迁移工作，它会将一个旧的 bucket 桶里面的数据分流到两个新的 bucket 桶
+// 完成一个常规桶及其溢出桶的数据迁移工作，它会将一个旧的 bucket 桶里面的数据分流到两个新的 bucket 桶
 func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 	// h.oldbuckets 桶数组中存放的是待迁移的数据
 	// h.buckets  桶数组中存放的是需要从旧桶中迁移来的数据，在 hashGrow 函数中创建的
 	b := (*bmap)(add(h.oldbuckets, oldbucket*uintptr(t.bucketsize))) // 获取旧桶数组中第 oldbucket 个桶
-	newbit := h.noldbuckets()                                        // 旧桶个数
+	newbit := h.noldbuckets()                                        // 旧桶个数，2^B，B 是旧桶的 B
 	if !evacuated(b) {
 		// 如果没有使用旧存储桶的迭代器，请重用溢出存储桶，而不是使用新存储桶(If !oldIterator.)
 
 		// xy 包含 x 和 y (low 和 high) 迁移目的地，分别用于存储当前桶的前半部分数据和后半部分数据
-		// 如果是等量扩容，x y 分别表示同一个新桶数组的前后半部分；如果是翻倍扩容，x y 分别表示两个新桶数组
+		// 如果是等量扩容，x y 分别表示同一个新桶数组的前后半部分；
+		// 如果是翻倍扩容，x y 分别表示新桶数组中前半部分和后半部分中的某个桶，桶的索引为 oldbucket、newbit+oldbucket
 		var xy [2]evacDst
 		x := &xy[0]
-		// 等量扩容，使用 x，新桶数组的长度是 newbit，与旧桶长度相等，从新桶数组的相同索引处的桶作为旧桶 oldbucket 的迁移目的地
+		// 等量扩容，新常规桶数组的长度是与旧桶长度相等，key 的哈希值对新常规桶数组的长度的余值是不变的，即桶的索引值不变
+		// 所以直接从新桶数组的相同索引处的桶作为旧桶 oldbucket 的迁移目的地
 		x.b = (*bmap)(add(h.buckets, oldbucket*uintptr(t.bucketsize)))
+		// k、e 分别指向新桶的首位 key、elem 地址
 		x.k = add(unsafe.Pointer(x.b), dataOffset)
 		x.e = add(x.k, bucketCnt*uintptr(t.keysize))
 
 		if !h.sameSizeGrow() {
-			// 只有增量扩容时才计算 y 指针，否则 GC 可能会看到错误的指针
+			// 只有翻倍扩容时才计算 y 指针，否则 GC 可能会看到错误的指针
 			y := &xy[1]
-			// 翻倍扩容，使用 y，新桶数组的长度是 2*newbit，即两倍于旧桶长度，从新桶数组的 oldbucket+newbit 索引处的桶作为旧桶 oldbucket 的迁移目的地
+			// 翻倍扩容，新桶数组的长度是 2*newbit，即两倍于旧桶长度
+			// key 的哈希值对新常规桶数组的长度的余值可能是不变的，也可能是旧的余值加上 2^B（旧常规桶数组的 B 值），取决于 hash 值第 B 位是 0 还是 1，从右到左第 0 位开始
+			// y 表示从新桶数组的 oldbucket+newbit 索引处的桶作为旧桶 oldbucket 的迁移目的地，以区别与 x
 			y.b = (*bmap)(add(h.buckets, (oldbucket+newbit)*uintptr(t.bucketsize)))
 			y.k = add(unsafe.Pointer(y.b), dataOffset)
 			y.e = add(y.k, bucketCnt*uintptr(t.keysize))
 		}
+		// x、y 分别对应的目的桶地址、key、elem 地址都已经计算完毕
+		// 对于等量扩容，只能使用 x
+		// 对于翻倍扩容，使用 x 还是 y，取决于 key 的哈希值第 B 位是 0 还是 1，从右到左第 0 位开始
 
-		// 依次遍历当前该桶及其溢出桶
+		// 依次遍历旧桶及其溢出桶
 		for ; b != nil; b = b.overflow(t) {
 			k := add(unsafe.Pointer(b), dataOffset)
 			e := add(k, bucketCnt*uintptr(t.keysize))
-			// 依次遍历当前桶的 key、elem
+			// 依次遍历当前旧桶或溢出桶的 key、elem
 			for i := 0; i < bucketCnt; i, k, e = i+1, add(k, uintptr(t.keysize)), add(e, uintptr(t.elemsize)) {
 				top := b.tophash[i] // 获取当前 key 的顶部哈希值
 				if isEmpty(top) {
-					// 当前键值对已经搬走了，更新顶部哈希值
+					// 元素为空，更新顶部哈希值为已经搬走了，继续下一个
 					b.tophash[i] = evacuatedEmpty
 					continue
 				}
@@ -1154,61 +1208,66 @@ func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 					// 存储的是 key 的指针，解引用得到真正的key
 					k2 = *((*unsafe.Pointer)(k2))
 				}
-				var useY uint8 // 0 或 1，是否使用 y
+				var useY uint8 // 0 或 1，默认是 0 ，即等量扩容
 				if !h.sameSizeGrow() {
-					// 增量扩容，计算哈希值以做出撤离决策(我们是否需要将 key/elem 发送到 桶 x 或 桶 y)
+					// 翻倍扩容，计算哈希值，以做出迁移决策(是否需要将 key/elem 发送到 桶 x 或 桶 y)
 					hash := t.hasher(k2, uintptr(h.hash0))
 					if h.flags&iterator != 0 && !t.reflexivekey() && !t.key.equal(k2, k2) {
-						// 如果 key ！= key （NaNs），则哈希值可能（并且可能会）与旧哈希值完全不同。
-						// 此外，它是不可重复的。在迭代器存在的情况下，需要可重复性，因为我们的迁移决策必须与迭代器做出的任何决策相匹配。
-						// 幸运的是，无论哪种方式，我们都可以自由地发送这些 key。此外，tophash 对于这些类型的 key 毫无意义。
-						// 我们让低位的 tophash 来驱动迁移决策。我们为下一级别重新计算一个新的随机 tophash，以便这些 key 在多次扩容后均匀分布在所有存储桶中。
+						// 有一种 key，每次对它计算 hash，得到的结果都不一样。这个 key 就是 math.NaN() 的结果，它的含义是 not a number，类型是 float64。
+						// 当它作为 map 的 key，在搬迁的时候，会遇到一个问题：再次计算它的哈希值和它当初插入 map 时的计算出来的哈希值不一样！
+						// 如果 key ！= key （NaNs），则哈希值可能与旧哈希值不同。
+						// 此外，它是不可重复的。在迭代器存在的情况下，需要可重复性，因为迁移决策必须与迭代器做出的任何决策相匹配。
+						// 幸运的是，无论哪种方式，都可以自由地发送这些 key。此外，tophash 对于这些类型的 key 毫无意义。
+						// 我们让低位的 tophash 来决定迁移目的桶。为下一级别重新计算一个新的随机 tophash，以便这些 key 在多次扩容后均匀分布在所有存储桶中。
 						useY = top & 1
 						top = tophash(hash)
 					} else {
+						// 对于翻倍扩容，key 的哈希值对新常规桶数组的长度的余值可能是不变的，也可能是旧的余值加上 2^B（旧常规桶数组的 B 值）
+						// 使用 x 还是 y，取决于 key 的哈希值第 B 位是 0 还是 1，从右到左第 0 位开始
+						// eg: B=4, 2^B=16, 即二进制 10000, 如果 hash 的第 4 位不为 0 则 新余值=旧余值+16，使用后半部分的桶
 						if hash&newbit != 0 {
 							useY = 1
 						}
 					}
 				}
 
+				// 默认值校验
 				if evacuatedX+1 != evacuatedY || evacuatedX^1 != evacuatedY {
 					throw("bad evacuatedN")
 				}
 
+				// 根据 useY 更新旧桶的顶部哈希值，以及确定使用 x 还是 y 作为目的桶
 				b.tophash[i] = evacuatedX + useY // evacuatedX + 1 == evacuatedY
 				dst := &xy[useY]                 // evacuation destination
 
 				if dst.i == bucketCnt {
-					// 当前桶已经放满了，创建溢出桶，并放入其中
+					// 当前桶已经放满了，创建溢出桶，索引归零，并更新桶、key、elem 地址
 					dst.b = h.newoverflow(t, dst.b)
 					dst.i = 0
 					dst.k = add(unsafe.Pointer(dst.b), dataOffset)
 					dst.e = add(dst.k, bucketCnt*uintptr(t.keysize))
 				}
 				dst.b.tophash[dst.i&(bucketCnt-1)] = top // 屏蔽 dst.i 作为一种优化，以避免边界检查
-				// 搬移 key
+				// 搬移 key 到新桶第 i 个 key 处
 				if t.indirectkey() {
 					*(*unsafe.Pointer)(dst.k) = k2 // copy pointer
 				} else {
 					typedmemmove(t.key, dst.k, k) // copy elem
 				}
-				// 搬移 elem
+				// 搬移 elem 到新桶第 i 个 elem 处
 				if t.indirectelem() {
 					*(*unsafe.Pointer)(dst.e) = *(*unsafe.Pointer)(e)
 				} else {
 					typedmemmove(t.elem, dst.e, e)
 				}
+				// 更新目的桶中的索引、key、elem，即在目的桶中向后移
+				// 这些更新可能会将这些指针越过 key 或 elem 数组的末尾，但是没关系，因为在存储桶的末端有溢出桶指针，可以防止指向存储桶的末端
 				dst.i++
-				// These updates might push these pointers past the end of the
-				// key or elem arrays.  That's ok, as we have the overflow pointer
-				// at the end of the bucket to protect against pointing past the
-				// end of the bucket.
 				dst.k = add(dst.k, uintptr(t.keysize))
 				dst.e = add(dst.e, uintptr(t.elemsize))
 			}
 		}
-		// 解除溢出桶的链接，并且帮助 GC清理 key/elem
+		// 如果没有协程在使用旧的常规桶数组，就把该旧桶 oldbucket 清除掉，帮助gc
 		if h.flags&oldIterator == 0 && t.bucket.ptrdata != 0 {
 			b := add(h.oldbuckets, oldbucket*uintptr(t.bucketsize))
 			// 保留 b.tophash，因为那里保持了迁移状态
@@ -1218,28 +1277,29 @@ func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 		}
 	}
 
+	// 更新迁移进度
 	if oldbucket == h.nevacuate {
+		// 只有迁移进度等于当前桶的索引时，才会去判断是否所有桶都已经迁移完毕
 		advanceEvacuationMark(h, t, newbit)
 	}
 }
 
-// 增加迁移进度计数器，并在扩容结束后释放 oldbuckets 和 extra.oldoverflow。
+// 增加迁移进度计数器，并在迁移结束后释放旧常规桶数组 oldbuckets 和旧常规桶的溢出桶 extra.oldoverflow。
 func advanceEvacuationMark(h *hmap, t *maptype, newbit uintptr) {
+	// 如果此次搬迁的 oldbucket 等于当前进度，进度加一
 	h.nevacuate++
 	// 实验表明，1024 至少矫枉过正一个数量级。无论如何，把它放在那里作为保护措施，以确保 O(1) 行为
 	stop := h.nevacuate + 1024
 	if stop > newbit {
-		stop = newbit
+		stop = newbit // 旧桶数组的长度
 	}
+	// 在旧桶数组中寻找下一个还没有迁移的桶
 	for h.nevacuate != stop && bucketEvacuated(t, h, h.nevacuate) {
 		h.nevacuate++
 	}
-	if h.nevacuate == newbit { // newbit == # of oldbuckets
-		// Growing is all done. Free old main bucket array.
+	if h.nevacuate == newbit {
+		// 所有的桶都已经迁移完成，将旧桶数组指针和旧溢出桶指针置空，清除同步扩容的标志
 		h.oldbuckets = nil
-		// Can discard old overflow buckets as well.
-		// If they are still referenced by an iterator,
-		// then the iterator holds a pointers to the slice.
 		if h.extra != nil {
 			h.extra.oldoverflow = nil
 		}
