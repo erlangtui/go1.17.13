@@ -4553,20 +4553,12 @@ func dolockOSThread() {
 
 //go:nosplit
 
-// LockOSThread wires the calling goroutine to its current operating system thread.
-// The calling goroutine will always execute in that thread,
-// and no other goroutine will execute in it,
-// until the calling goroutine has made as many calls to
-// UnlockOSThread as to LockOSThread.
-// If the calling goroutine exits without unlocking the thread,
-// the thread will be terminated.
-//
-// All init functions are run on the startup thread. Calling LockOSThread
-// from an init function will cause the main function to be invoked on
-// that thread.
-//
-// A goroutine should call LockOSThread before calling OS services or
-// non-Go library functions that depend on per-thread state.
+// LockOSThread 将调用该方法的 goroutine 锁定到其当前操作系统线程。
+// 该 goroutine 将始终在该线程中执行，并且不会在其中执行其他 goroutine，
+// 直到该 goroutine 对 UnlockOSThread 的调用次数与对 LockOSThread 的调用次数一样多。
+// 如果该 goroutine 在未解锁线程的情况下退出，则线程将被终止。
+// 所有 init 函数都在启动线程上运行。从 init 函数调用 LockOSThread 将导致 main 函数在该线程上被调用。
+// goroutine 应在调用依赖于每个线程状态的 OS 服务或非 Go 库函数之前调用 LockOSThread。
 func LockOSThread() {
 	if atomic.Load(&newmHandoff.haveTemplateThread) == 0 && GOOS != "plan9" {
 		// If we need to start a new thread from the locked

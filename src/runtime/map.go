@@ -107,7 +107,7 @@ type mapextra struct {
 	nextOverflow *bmap    // 指向首个可用溢出桶的指针，在创建存储桶数组时，会额外创建多个溢出桶，这些溢出桶在内存上也是连续的
 }
 
-// 为桶 b 创建溢出桶对象
+// 为桶 b 创建溢出桶对象，并返回该溢出桶指针
 func (h *hmap) newoverflow(t *maptype, b *bmap) *bmap {
 	var ovf *bmap
 	if h.extra != nil && h.extra.nextOverflow != nil {
@@ -306,13 +306,13 @@ func makemap(t *maptype, hint int, h *hmap) *hmap {
 	return h
 }
 
-// makeBucketArray 用于创建一个存储桶数组，并返回该数组的地址和下一个溢出桶的地址
-// 该存储桶数组在内存上是连续的，溢出桶在内存上也是连续的只是返回首个桶的地址
+// makeBucketArray 用于创建一个存储桶数组，如果键值对较多的话，会额外创建一些桶作为溢出桶，并返回该数组的地址和第一个溢出桶地址(存储在mapextra结构体的nextOverflow字段)
+// 这些桶在内存上是连续的，取前部分为存储桶，后部分为溢出桶
 // 2^b 是需要分配存储桶的最小数量，当 b<4 时，溢出的可能性不大，不会创建溢出桶
 // 当 b>=4 时，会总共申请 2^b+2^b/16 个桶，由于内存申请策略会向上对齐，实际申请的内存可能足以放下更多的桶
 // 此时，取前 2^b 个桶作为存储桶，后面的为溢出桶，buckets 指向存储桶数组首位地址，nextOverflow 指向首位溢出桶
 // dirtyalloc 应该是 nil 或指向之前由 makeBucketArray 以相同 t 和 b 参数分配的存储桶数组
-// 如果 dirtyalloc 是 nil 则会重新申请内存分配一个新的存储桶数组，否则 dirtyalloc 指向的数组将会被清理掉并被重新被复用为底层数组
+// 如果 dirtyalloc 是 nil 则会重新申请内存分配一个新的存储桶数组，否则 dirtyalloc 指向的数组将会被清理掉并被重新被复用为存储桶数组
 func makeBucketArray(t *maptype, b uint8, dirtyalloc unsafe.Pointer) (buckets unsafe.Pointer, nextOverflow *bmap) {
 	base := bucketShift(b)
 	nbuckets := base
@@ -402,7 +402,7 @@ func mapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 	top := tophash(hash) // 计算顶部 8 位哈希值
 bucketloop:
 	for ; b != nil; b = b.overflow(t) {
-		// 从旧桶开始沿着溢出桶依次遍历
+		// 从桶开始沿着溢出桶依次遍历
 		for i := uintptr(0); i < bucketCnt; i++ {
 			// 对每个桶依次遍历
 			if b.tophash[i] != top {
@@ -557,6 +557,9 @@ func mapaccess2_fat(t *maptype, h *hmap, key, zero unsafe.Pointer) (unsafe.Point
 }
 
 // mapassign 与 mapaccess 类似，但是如果 map 中没有该 key 时，会为其分配一个槽
+// 如果有其他 goroutine 正在写，抛出并发写错误；否则，添加一个写标志，此处对 flags 字段的读写都是非原子非加锁的，所以 map 并不保证并发安全；
+// 如果该 map 桶为空，则创建一个新的桶，初始状态为一个桶，与前面 makemap 呼应，makemap 时可以不实际创建桶，只要在需要写入的时候才创建；
+// 根据哈希值计算该 key 对应的存储桶数组的索引，假设为 ni，如果该 map 正在扩容，且旧桶数组中应该要迁移到新桶 ni 的旧 oi 还没有迁移的话，则迁移 oi 桶及其溢出桶的数据到 ni 桶
 func mapassign(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 	if h == nil {
 		// map 为 nil，直接 panic，无法向一个 nil 中写数据
@@ -1057,7 +1060,7 @@ func mapclear(t *maptype, h *hmap) {
 		*h.extra = mapextra{}
 	}
 
-	// makeBucketArray 清除 h.buckets 指向的内存，并通过生成任何溢出的存储桶来恢复它们，就像 h.buckets 是新分配的一样
+	// makeBucketArray 清除 h.buckets 指向的内存，并通过生成任何溢出桶来恢复它们，就像 h.buckets 是新分配的一样
 	_, nextOverflow := makeBucketArray(t, h.B, h.buckets)
 	if nextOverflow != nil {
 		// 如果创建了溢出存储桶，则在初始存储桶创建期间将分配 h.extra
@@ -1133,15 +1136,15 @@ func tooManyOverflowBuckets(noverflow uint16, B uint8) bool {
 	return noverflow >= uint16(1)<<(B&15)
 }
 
-// 迁移第 bucket 个桶及其溢出桶（如果有）
+// 迁移将要迁移到新存储桶数组第 bucket 个桶的旧桶及其溢出桶，可能会多迁移一个旧桶及其溢出桶
 func growWork(t *maptype, h *hmap, bucket uintptr) {
-	// 确保迁移的 oldbucket 桶与将要使用的 bucket 桶对应
+	// bucket&h.oldbucketmask() 计算新存储桶数组 bucket 序号处的桶应该是从旧存储桶数组中哪个序号对应的桶迁移过来的，并迁移该旧桶及其溢出桶
 	evacuate(t, h, bucket&h.oldbucketmask())
 
 	// 经过 evacuate 迁移后，h.nevacuate 在函数 advanceEvacuationMark 更新
 	if h.growing() {
 		// 如果正在扩容，多迁移一个 h.nevacuate 索引处的桶；如果扩容完成，则 h.oldbuckets 为 nil，该语句进不来
-		// 即每次最多只迁移 2 个 bucket
+		// 即每次最多只迁移 2 个旧存储桶及其溢出桶
 		evacuate(t, h, h.nevacuate)
 	}
 }
@@ -1160,7 +1163,9 @@ type evacDst struct {
 	e unsafe.Pointer // 目的桶 b 中第 i 个 elem 的地址
 }
 
-// 完成一个存储桶及其溢出桶的数据迁移工作，它会将一个旧的 bucket 桶里面的数据分流到两个新的 bucket 桶
+// 完成一个存储桶及其溢出桶的数据迁移工作；
+// 如果是翻倍扩容，它会将旧桶及其溢出桶的数据分流到对应的两个新桶；
+// 如果是等量扩容，说明桶是桶中的数据是稀疏存储的，它会将旧桶及其溢出桶的数据分流到对应的一个新桶；
 func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 	// h.oldbuckets 桶数组中存放的是待迁移的数据
 	// h.buckets  桶数组中存放的是需要从旧桶中迁移来的数据，在 hashGrow 函数中创建的
@@ -1299,7 +1304,7 @@ func advanceEvacuationMark(h *hmap, t *maptype, newbit uintptr) {
 	if stop > newbit {
 		stop = newbit // 旧桶数组的长度
 	}
-	// 在旧桶数组中寻找下一个还没有迁移的桶
+	// 从 h.nevacuate 索引处开始，在旧桶数组中寻找下一个还没有迁移的桶
 	for h.nevacuate != stop && bucketEvacuated(t, h, h.nevacuate) {
 		h.nevacuate++
 	}
