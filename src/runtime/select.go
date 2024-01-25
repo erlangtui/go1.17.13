@@ -13,9 +13,7 @@ import (
 
 const debugSelect = false
 
-// Select case descriptor.
-// Known to compiler.
-// Changes here must also be made in src/cmd/compile/internal/walk/select.go's scasetype.
+// select 的 case 的描述，修改时需要同步修改 src/cmd/compile/internal/walk/select.go's scasetype.
 type scase struct {
 	c    *hchan         // chan
 	elem unsafe.Pointer // data element
@@ -103,19 +101,10 @@ func block() {
 	gopark(nil, nil, waitReasonSelectNoCases, traceEvGoStop, 1) // forever
 }
 
-// cas0 points to an array of type [ncases]scase, and order0 points to
-// an array of type [2*ncases]uint16 where ncases must be <= 65536.
-// Both reside on the goroutine's stack (regardless of any escaping in
-// selectgo).
-//
-// For race detector builds, pc0 points to an array of type
-// [ncases]uintptr (also on the stack); for other builds, it's set to
-// nil.
-//
-// selectgo returns the index of the chosen scase, which matches the
-// ordinal position of its respective select{recv,send,default} call.
-// Also, if the chosen scase was a receive operation, it reports whether
-// a value was received.
+// cas0 指向数组 [ncases]scase, order0 指向数组 [2*ncases]uint16， ncases <= 65536.
+// 两者都驻留在 goroutine 的堆栈上（无论 selectgo 中是否有任何逃逸）
+// selectgo 返回所选 scase 的索引，该索引与其各自的 select{recv，send，default} 调用的位置序号匹配。
+// 此外，如果所选的 scase 是接收操作，则报告是否接收了值。
 // 1. 锁定scase语句中所有的channel
 // 2. 按照随机顺序检测scase中的channel是否ready
 //   2.1 如果case可读，则读取channel中数据，解锁所有的channel，然后返回(case index, true)
@@ -132,8 +121,7 @@ func selectgo(cas0 *scase, order0 *uint16, pc0 *uintptr, nsends, nrecvs int, blo
 		print("select: cas0=", cas0, "\n")
 	}
 
-	// NOTE: In order to maintain a lean stack size, the number of scases
-	// is capped at 65536.
+	// 为了保持精简的堆栈大小，scases 数量上限为 65536。
 	cas1 := (*[1 << 16]scase)(unsafe.Pointer(cas0))
 	order1 := (*[1 << 17]uint16)(unsafe.Pointer(order0))
 

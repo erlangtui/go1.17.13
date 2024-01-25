@@ -701,7 +701,10 @@ done: // 直接跳转到此处说明是找到了已经存储的 key
 	return elem
 }
 
-// 从 map 中删除某个 key
+// 从 map 中删除某个 key，整体逻辑与 mapassign 类似；
+// map 为 nil 或是没有 key 直接返回；已经有其他 goroutine 正在写，直接抛出并发写错误；否则，添加写标志；
+// 根据哈希值计算该 key 对应的存储桶数组的索引，假设为 ni，如果该 map 正在扩容，且旧桶数组中应该要迁移到新桶 ni 的旧桶 oi 还没有迁移，则将该旧桶 oi 及其溢出桶进行迁移，再进行遍历；
+// 根据 ni 获取桶指针，依次遍历该存储桶及其溢出桶，遍历每个桶时，依次与每个顶部哈希值比较，顶部哈希值相等时，再去与 key 进行比较，key 相等时，获取其对应的 elem 地址，分别清除 key 和 elem，并将顶部哈希值置为 emptyOne；
 func mapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
 	if raceenabled && h != nil {
 		callerpc := getcallerpc()
