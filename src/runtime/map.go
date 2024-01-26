@@ -703,8 +703,16 @@ done: // 直接跳转到此处说明是找到了已经存储的 key
 
 // 从 map 中删除某个 key，整体逻辑与 mapassign 类似；
 // map 为 nil 或是没有 key 直接返回；已经有其他 goroutine 正在写，直接抛出并发写错误；否则，添加写标志；
-// 根据哈希值计算该 key 对应的存储桶数组的索引，假设为 ni，如果该 map 正在扩容，且旧桶数组中应该要迁移到新桶 ni 的旧桶 oi 还没有迁移，则将该旧桶 oi 及其溢出桶进行迁移，再进行遍历；
-// 根据 ni 获取桶指针，依次遍历该存储桶及其溢出桶，遍历每个桶时，依次与每个顶部哈希值比较，顶部哈希值相等时，再去与 key 进行比较，key 相等时，获取其对应的 elem 地址，分别清除 key 和 elem，并将顶部哈希值置为 emptyOne；
+// 根据哈希值计算该 key 对应的存储桶数组的索引，假设为 ni，如果该 map 正在扩容，
+// 且旧桶数组中应该要迁移到新桶 ni 的旧桶 oi 还没有迁移，则将该旧桶 oi 及其溢出桶进行迁移，再进行遍历；
+// 根据 ni 获取桶指针，依次遍历该存储桶及其溢出桶，遍历每个桶时，依次与每个顶部哈希值比较，顶部哈希值相等时，
+// 再去与 key 进行比较，key 相等时，获取其对应的 elem 地址，分别清除 key 和 elem，并将顶部哈希值置为 emptyOne；
+// 如果该单元格之后，再也没有其他 key 了，那么该单元格的 tophash 就要改为 emptyRest，此时分为两种情况：
+// 	 1，该单元格是该桶最后一个单元格，且下一个溢出桶的第一个单元格的 tophash 为 emptyRest；
+//   2，该单元格不是该桶的最后一个单元格，且下一个单元格的 tophash 为 emptyRest；
+// 当该单元格的 tophash 置为 emptyRest，需要依次向前遍历每个单元格，将每一个 tophash 为 emptyOne 的单元格改为 emptyRest，表示该单元格及之后都为空，
+// 直到某个单元格的 tophash 不为 emptyOne，或是所有单元格都已经遍历完即达到存储桶的第一个单元格；
+// 删除某个键值对后需要将其计数减一，最后返回时需要清除写标志；
 func mapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
 	if raceenabled && h != nil {
 		callerpc := getcallerpc()
@@ -841,7 +849,9 @@ search: // 依次遍历当前桶及其溢出桶
 	h.flags &^= hashWriting // 清除写标志
 }
 
-// mapclear 从 map 中删除所有的 key
+// mapclear 从 map 中删除所有的 key，如果 map 为 nil 或是没有元素，直接返回，有其他 goroutine 正在写，抛出错误
+// 将等量扩容标志清除、旧桶数组指针置空，这两个只有在清空和扩容完毕时才有此操作，表示当前 map 没有在扩容中；
+// 将迁移进度归零、溢出桶数量归零、键值对数量归零，以及将存储桶数组的内存清除
 func mapclear(t *maptype, h *hmap) {
 	if raceenabled && h != nil {
 		callerpc := getcallerpc()
@@ -860,10 +870,10 @@ func mapclear(t *maptype, h *hmap) {
 	}
 
 	h.flags ^= hashWriting   // 按位与添加写标志
-	h.flags &^= sameSizeGrow // 按位清除等量扩容标记
-	h.oldbuckets = nil       // 旧桶数组指针清空
-	h.nevacuate = 0          // 迁移进度归零
-	h.noverflow = 0          // 溢出桶数量归零
+	h.flags &^= sameSizeGrow // 按位清除等量扩容标记，只有清空和扩容完毕时才会清除该标志
+	h.oldbuckets = nil       // 旧桶数组指针清空，只有清空和扩容完毕时才会置为空
+	h.nevacuate = 0          // 迁移进度归零，只有清空和开始扩容时才归零
+	h.noverflow = 0          // 溢出桶数量归零，只有清空和开始扩容时才归零
 	h.count = 0              // 桶中元素数量归零
 
 	// 重置哈希种子，使攻击者更难重复触发哈希冲突 See issue 25237.
@@ -874,7 +884,7 @@ func mapclear(t *maptype, h *hmap) {
 		*h.extra = mapextra{}
 	}
 
-	// makeBucketArray 清除 h.buckets 指向的内存，并通过生成任何溢出桶来恢复它们，就像 h.buckets 是新分配的一样
+	// makeBucketArray 能够清除 h.buckets 指向的内存，就像 h.buckets 是新分配的一样
 	_, nextOverflow := makeBucketArray(t, h.B, h.buckets)
 	if nextOverflow != nil {
 		// 如果创建了溢出存储桶，则在初始存储桶创建期间将分配 h.extra
